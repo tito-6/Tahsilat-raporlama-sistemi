@@ -1,0 +1,71 @@
+# Add project-specific local files to ignore here
+# Local environment variables
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Dependency directories
+/node_modules
+/.pnp
+.pnp.js
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Build outputs
+/.next/
+/out/
+/build
+/dist
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Testing
+/coverage
+
+# Misc
+.DS_Store
+*.pem
+
+# Vercel
+.vercel
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Database files
+*.sqlite
+*.sqlite3
+*.db
+tahsilat_data.db
+/backups/
+*.bak
+
+# Debug and temporary files
+debug_*.py
+debug_*.js
+*_debug.py
+*_debug.js
+api_response.json
+debug_response.json
+response.json
+tmp/
+temp/

@@ -1,0 +1,527 @@
+import { NextApiRequest, NextApiResponse } from 'next';
+import path from 'path';
+import sqlite3 from 'sqlite3';
+import { open } from 'sqlite';
+import { format } from 'date-fns';
+import { tr } from 'date-fns/locale';
+
+// Helper function to parse Turkish date format (DD/MM/YYYY)
+function parseTurkishDate(dateStr: string | Date): Date {
+  if (!dateStr) return new Date(); // Return current date as fallback
+  
+  // Check if it's already a Date object
+  if (dateStr instanceof Date) return dateStr;
+  
+  console.log(`Parsing date: ${dateStr}`);
+  
+  // Try parsing as Turkish format (DD/MM/YYYY or DD.MM.YYYY)
+  // Handle DD/MM/YYYY format
+  const formatRegex1 = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+  const match1 = dateStr.match(formatRegex1);
+  if (match1) {
+    const [, day, month, year] = match1;
+    const parsedDate = new Date(`${year}-${month}-${day}`);
+    console.log(`Parsed DD/MM/YYYY: ${dateStr} -> ${parsedDate.toISOString()}`);
+    return parsedDate;
+  }
+  
+  // Handle DD.MM.YYYY format
+  const formatRegex2 = /^(\d{2})\.(\d{2})\.(\d{4})$/;
+  const match2 = dateStr.match(formatRegex2);
+  if (match2) {
+    const [, day, month, year] = match2;
+    const parsedDate = new Date(`${year}-${month}-${day}`);
+    console.log(`Parsed DD.MM.YYYY: ${dateStr} -> ${parsedDate.toISOString()}`);
+    return parsedDate;
+  }
+  
+  // Fallback to standard JS Date parsing
+  const parsedDate = new Date(dateStr);
+  if (!isNaN(parsedDate.getTime())) {
+    console.log(`Standard date parse: ${dateStr} -> ${parsedDate.toISOString()}`);
+    return parsedDate;
+  }
+  
+  console.error(`Failed to parse date: ${dateStr}`);
+  return new Date(); // Return current date if parsing fails
+}
+
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (req.method !== 'GET') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  try {
+    const { start_date, end_date, week_number } = req.query;
+    
+    // If week_number is provided, calculate the start and end dates
+    let startDate = start_date as string;
+    let endDate = end_date as string;
+    
+    if (week_number && !startDate && !endDate) {
+      const year = new Date().getFullYear();
+      const weekNum = parseInt(week_number as string);
+      const dates = getDateRangeOfWeek(weekNum, year);
+      startDate = dates.start;
+      endDate = dates.end;
+    } else if (!startDate || !endDate) {
+      return res.status(400).json({ error: 'Either start_date and end_date, or week_number is required' });
+    }
+    
+    console.log(`Turkish Weekly Report - Date Range: ${startDate} to ${endDate}`);
+
+    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
+    const db = await open({
+      filename: dbPath,
+      driver: sqlite3.Database
+    });
+
+    // Get unique customers and projects for the week
+    // Get all individual payment records in the date range (not grouped by customer-project)
+    const allPayments = await db.all(`
+      SELECT 
+        id,
+        customer_name,
+        project_name,
+        payment_date,
+        amount_paid,
+        currency_paid,
+        payment_method,
+        exchange_rate
+      FROM payments 
+      WHERE date(
+        CASE 
+          WHEN payment_date LIKE '%/%/%' THEN 
+            substr(payment_date, 7, 4) || '-' || 
+            substr('0' || substr(payment_date, 4, 2), -2, 2) || '-' || 
+            substr('0' || substr(payment_date, 1, 2), -2, 2)
+          ELSE payment_date
+        END
+      ) BETWEEN date(?) AND date(?)
+      ORDER BY customer_name, project_name, payment_date
+    `, [startDate, endDate]);
+
+    // Create date map for the week
+    const startDateObj = new Date(startDate);
+    const endDateObj = new Date(endDate);
+    const dayMap = getDayMapForWeek(startDateObj, endDateObj);
+
+    // Check which payment methods are used in this week
+    const paymentMethods = await db.all(`
+      SELECT DISTINCT payment_method
+      FROM payments
+      WHERE date(
+        CASE 
+          WHEN payment_date LIKE '%/%/%' THEN 
+            substr(payment_date, 7, 4) || '-' || 
+            substr('0' || substr(payment_date, 4, 2), -2, 2) || '-' || 
+            substr('0' || substr(payment_date, 1, 2), -2, 2)
+          ELSE payment_date
+        END
+      ) BETWEEN date(?) AND date(?)
+      AND payment_method IS NOT NULL AND payment_method != ''
+    `, [startDate, endDate]);
+
+    // The default payment method to display if multiple are found
+    const paymentMethodLabel = paymentMethods.length === 1 
+      ? translatePaymentMethod(paymentMethods[0].payment_method)
+      : "Banka Havalesi-Nakit"; // Default to Bank Transfer-Cash if multiple methods
+
+    // Get payment methods count
+    const paymentMethodCount: Record<string, number> = {};
+    for (const method of paymentMethods) {
+      const count = await db.get(`
+        SELECT COUNT(*) as count
+        FROM payments
+        WHERE date(
+          CASE 
+            WHEN payment_date LIKE '%/%/%' THEN 
+              substr(payment_date, 7, 4) || '-' || 
+              substr('0' || substr(payment_date, 4, 2), -2, 2) || '-' || 
+              substr('0' || substr(payment_date, 1, 2), -2, 2)
+            ELSE payment_date
+          END
+        ) BETWEEN date(?) AND date(?)
+        AND payment_method = ?
+      `, [startDate, endDate, method.payment_method]);
+      
+      paymentMethodCount[method.payment_method] = count.count;
+    }
+
+    // Build weekly report from individual payment records
+    const weeklyReport = [];
+    let serialNo = 1;
+
+    for (const payment of allPayments) {
+      const { customer_name, project_name, payment_date, amount_paid, currency_paid, exchange_rate } = payment;
+      
+      // Create week structure for this individual payment
+      const weekData = {
+        sira_no: serialNo++,
+        musteri_adi: customer_name,
+        proje: project_name,
+        pazartesi: { tl: 0, usd: 0, original_currency: '', date: dayMap.pazartesi },
+        sali: { tl: 0, usd: 0, original_currency: '', date: dayMap.sali },
+        carsamba: { tl: 0, usd: 0, original_currency: '', date: dayMap.carsamba },
+        persembe: { tl: 0, usd: 0, original_currency: '', date: dayMap.persembe },
+        cuma: { tl: 0, usd: 0, original_currency: '', date: dayMap.cuma },
+        cumartesi: { tl: 0, usd: 0, original_currency: '', date: dayMap.cumartesi },
+        pazar: { tl: 0, usd: 0, original_currency: '', date: dayMap.pazar },
+        genel_toplam: { tl: 0, usd: 0, original_currencies: [] as string[] }
+      };
+
+      // Map day names in Turkish
+      const dayNames = ['pazar', 'pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi'];
+
+      // Process this single payment
+      const paymentDate = parseTurkishDate(payment_date);
+      const dayIndex = paymentDate.getDay();
+      const dayName = dayNames[dayIndex];
+      
+      if (weekData[dayName]) {
+        // Calculate amounts based on currency
+        let tlAmount = 0;
+        let usdAmount = 0;
+        
+        if (currency_paid === 'TL') {
+          tlAmount = amount_paid;
+          usdAmount = amount_paid / (exchange_rate || 50); // Convert TL to USD
+        } else if (currency_paid === 'USD') {
+          usdAmount = amount_paid;
+          tlAmount = amount_paid * (exchange_rate || 50); // Convert USD to TL
+        } else if (currency_paid === 'EUR') {
+          usdAmount = amount_paid * 1.1; // EUR to USD approximation
+          tlAmount = usdAmount * (exchange_rate || 50); // USD to TL
+        }
+        
+        // Set payment for the specific day
+        weekData[dayName] = {
+          tl: tlAmount,
+          usd: usdAmount,
+          original_currency: currency_paid,
+          date: weekData[dayName].date
+        };
+        
+        // Set totals
+        weekData.genel_toplam = {
+          tl: tlAmount,
+          usd: usdAmount,
+          original_currencies: [currency_paid]
+        };
+      }
+
+      weeklyReport.push(weekData);
+    }
+        const dayData = (weekData as any)[dayName];
+
+        // Track original currency for each day
+        if (payment.currency_paid === 'TRY' || payment.currency_paid === 'TL') {
+          dayData.tl += payment.daily_amount;
+          dayData.original_currency = dayData.original_currency ? 
+            `${dayData.original_currency},TL` : 'TL';
+        } else if (payment.currency_paid === 'USD') {
+          dayData.usd += payment.daily_amount;
+          dayData.original_currency = dayData.original_currency ? 
+            `${dayData.original_currency},USD` : 'USD';
+        } else if (payment.currency_paid === 'EUR') {
+          // For EUR, add to USD after conversion and mark as EUR
+          dayData.usd += payment.daily_amount_usd;
+          dayData.original_currency = dayData.original_currency ? 
+            `${dayData.original_currency},EUR` : 'EUR';
+        }
+
+        // Add to total
+        weekData.genel_toplam.tl += payment.currency_paid === 'TRY' || payment.currency_paid === 'TL' ? payment.daily_amount : 0;
+        weekData.genel_toplam.usd += payment.daily_amount_usd;
+        
+        // Track all currencies used for the customer
+        if (!weekData.genel_toplam.original_currencies.includes(payment.currency_paid)) {
+          weekData.genel_toplam.original_currencies.push(payment.currency_paid);
+        }
+      });
+
+      weeklyReport.push(weekData);
+    }
+
+    // Calculate week totals
+    const weekTotals = {
+      sira_no: 'TOPLAM',
+      musteri_adi: '',
+      proje: '',
+      pazartesi: { tl: 0, usd: 0, original_currency: '', date: dayMap.pazartesi },
+      sali: { tl: 0, usd: 0, original_currency: '', date: dayMap.sali },
+      carsamba: { tl: 0, usd: 0, original_currency: '', date: dayMap.carsamba },
+      persembe: { tl: 0, usd: 0, original_currency: '', date: dayMap.persembe },
+      cuma: { tl: 0, usd: 0, original_currency: '', date: dayMap.cuma },
+      cumartesi: { tl: 0, usd: 0, original_currency: '', date: dayMap.cumartesi },
+      pazar: { tl: 0, usd: 0, original_currency: '', date: dayMap.pazar },
+      genel_toplam: { tl: 0, usd: 0, original_currencies: [] as string[] }
+    };
+
+    weeklyReport.forEach(row => {
+      ['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'].forEach(day => {
+        const rowDay = (row as any)[day];
+        const totalDay = (weekTotals as any)[day];
+        
+        totalDay.tl += rowDay.tl;
+        totalDay.usd += rowDay.usd;
+        
+        // Combine original currencies for the day total
+        if (rowDay.original_currency) {
+          const currencies = rowDay.original_currency.split(',');
+          currencies.forEach((curr: string) => {
+            if (curr && !totalDay.original_currency.includes(curr)) {
+              totalDay.original_currency = totalDay.original_currency ? 
+                `${totalDay.original_currency},${curr}` : curr;
+            }
+          });
+        }
+      });
+      
+      weekTotals.genel_toplam.tl += row.genel_toplam.tl;
+      weekTotals.genel_toplam.usd += row.genel_toplam.usd;
+      
+      // Combine all currencies used in the week
+      row.genel_toplam.original_currencies.forEach(curr => {
+        if (!weekTotals.genel_toplam.original_currencies.includes(curr)) {
+          weekTotals.genel_toplam.original_currencies.push(curr);
+        }
+      });
+    });
+
+    // Format the date range for the report title in Turkish format (DD.MM-DD.MM.YYYY)
+    const reportDateRange = formatDateRangeForTitle(startDateObj, endDateObj);
+
+    // Get company name from settings (or use default)
+    let companyName = "MODEL KUYUM-MODEL SANAYİ MERKEZİ";
+    try {
+      const settings = await db.get(`SELECT value FROM settings WHERE key = 'company_name'`);
+      if (settings && settings.value) {
+        companyName = settings.value;
+      }
+    } catch (error) {
+      console.log("Using default company name");
+    }
+
+    // Get check payments for this week
+    const checkPayments = await db.all(`
+      SELECT 
+        customer_name,
+        project_name,
+        payment_date,
+        currency_paid,
+        SUM(amount_paid) as amount,
+        SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as amount_usd
+      FROM payments 
+      WHERE date(
+        CASE 
+          WHEN payment_date LIKE '%/%/%' THEN 
+            substr(payment_date, 7, 4) || '-' || 
+            substr('0' || substr(payment_date, 4, 2), -2, 2) || '-' || 
+            substr('0' || substr(payment_date, 1, 2), -2, 2)
+          ELSE payment_date
+        END
+      ) BETWEEN date(?) AND date(?)
+      AND (LOWER(payment_method) LIKE '%check%' OR LOWER(payment_method) LIKE '%çek%')
+      GROUP BY customer_name, project_name, payment_date, currency_paid
+      ORDER BY customer_name, project_name, payment_date
+    `, [startDate, endDate]);
+
+    // Process check payments into weekly structure
+    const checkPaymentsReport: any[] = [];
+    let checkSerialNo = 1;
+
+    if (checkPayments.length > 0) {
+      // Group check payments by customer and project
+      const groupedChecks = checkPayments.reduce((acc: any, payment: any) => {
+        const key = `${payment.customer_name}_${payment.project_name}`;
+        if (!acc[key]) {
+          acc[key] = {
+            customer_name: payment.customer_name,
+            project_name: payment.project_name,
+            payments: []
+          };
+        }
+        acc[key].payments.push(payment);
+        return acc;
+      }, {});
+
+      // Create check payments rows
+      Object.values(groupedChecks).forEach((group: any) => {
+        const weekData: any = {
+          sira_no: checkSerialNo++,
+          musteri_adi: group.customer_name,
+          proje: group.project_name,
+          pazartesi: { tl: 0, usd: 0, original_currency: '' },
+          sali: { tl: 0, usd: 0, original_currency: '' },
+          carsamba: { tl: 0, usd: 0, original_currency: '' },
+          persembe: { tl: 0, usd: 0, original_currency: '' },
+          cuma: { tl: 0, usd: 0, original_currency: '' },
+          cumartesi: { tl: 0, usd: 0, original_currency: '' },
+          pazar: { tl: 0, usd: 0, original_currency: '' },
+          genel_toplam: { tl: 0, usd: 0, original_currencies: [] as string[] }
+        };
+
+        // Process each payment and assign to correct day
+        group.payments.forEach((payment: any) => {
+          const paymentDate = new Date(payment.payment_date.includes('/') ? 
+            payment.payment_date.split('/').reverse().join('-') : 
+            payment.payment_date);
+          
+          const dayOfWeek = paymentDate.getDay();
+          const dayNames = ['pazar', 'pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi'];
+          const dayName = dayNames[dayOfWeek];
+          
+          if (weekData[dayName] && typeof weekData[dayName] === 'object') {
+            if (payment.currency_paid === 'USD') {
+              weekData[dayName].usd += payment.amount;
+            } else {
+              weekData[dayName].tl += payment.amount;
+            }
+            weekData[dayName].original_currency = payment.currency_paid;
+            
+            // Update totals
+            weekData.genel_toplam.tl += payment.currency_paid === 'TL' ? payment.amount : 0;
+            weekData.genel_toplam.usd += payment.amount_usd;
+            if (!weekData.genel_toplam.original_currencies.includes(payment.currency_paid)) {
+              weekData.genel_toplam.original_currencies.push(payment.currency_paid);
+            }
+          }
+        });
+
+        checkPaymentsReport.push(weekData);
+      });
+    }
+
+    // Calculate check payments totals
+    const checkTotals: any = {
+      sira_no: "TOPLAM",
+      musteri_adi: "",
+      proje: "",
+      pazartesi: { tl: 0, usd: 0, original_currency: "", date: dayMap.pazartesi },
+      sali: { tl: 0, usd: 0, original_currency: "", date: dayMap.sali },
+      carsamba: { tl: 0, usd: 0, original_currency: "", date: dayMap.carsamba },
+      persembe: { tl: 0, usd: 0, original_currency: "", date: dayMap.persembe },
+      cuma: { tl: 0, usd: 0, original_currency: "", date: dayMap.cuma },
+      cumartesi: { tl: 0, usd: 0, original_currency: "", date: dayMap.cumartesi },
+      pazar: { tl: 0, usd: 0, original_currency: "", date: dayMap.pazar },
+      genel_toplam: { tl: 0, usd: 0, original_currencies: [] as string[] }
+    };
+
+    // Sum up check totals
+    checkPaymentsReport.forEach((row: any) => {
+      const days = ['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'];
+      days.forEach(day => {
+        if (checkTotals[day] && row[day]) {
+          checkTotals[day].tl += row[day].tl || 0;
+          checkTotals[day].usd += row[day].usd || 0;
+        }
+      });
+      checkTotals.genel_toplam.tl += row.genel_toplam?.tl || 0;
+      checkTotals.genel_toplam.usd += row.genel_toplam?.usd || 0;
+    });
+
+    await db.close();
+
+    res.status(200).json({
+      success: true,
+      data: {
+        report_title: `${companyName} TAHSİLATLAR TABLOSU`,
+        date_range: reportDateRange,
+        payment_method: paymentMethodLabel,
+        payment_methods: paymentMethodCount,
+        weekly_report: weeklyReport,
+        week_totals: weekTotals,
+        check_payments: checkPaymentsReport,
+        check_totals: checkTotals,
+        period: {
+          start_date: startDate,
+          end_date: endDate,
+          week_number: getWeekNumber(new Date(startDate))
+        },
+        day_map: dayMap
+      }
+    });
+
+  } catch (error) {
+    console.error('Turkish weekly report error:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate weekly report',
+      message: error instanceof Error ? error.message : String(error)
+    });
+  }
+}
+
+// Helper function to get week number
+function getWeekNumber(date: Date): number {
+  const firstDayOfYear = new Date(date.getFullYear(), 0, 1);
+  const pastDaysOfYear = (date.getTime() - firstDayOfYear.getTime()) / 86400000;
+  return Math.ceil((pastDaysOfYear + firstDayOfYear.getDay() + 1) / 7);
+}
+
+// Helper function to get date range of a week number
+function getDateRangeOfWeek(weekNum: number, year: number): { start: string; end: string } {
+  const firstDayOfYear = new Date(year, 0, 1);
+  const daysOffset = (weekNum - 1) * 7 - firstDayOfYear.getDay() + 1;
+  const startDate = new Date(year, 0, daysOffset);
+  const endDate = new Date(startDate);
+  endDate.setDate(startDate.getDate() + 6);
+  
+  return {
+    start: format(startDate, 'yyyy-MM-dd'),
+    end: format(endDate, 'yyyy-MM-dd')
+  };
+}
+
+// Helper function to create day mapping with dates for a week
+function getDayMapForWeek(startDate: Date, endDate: Date): Record<string, string> {
+  const result: Record<string, string> = {
+    pazartesi: '',
+    sali: '',
+    carsamba: '',
+    persembe: '',
+    cuma: '',
+    cumartesi: '',
+    pazar: ''
+  };
+  
+  // Map day names in Turkish
+  const dayNames = ['pazar', 'pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi'];
+  
+  // Start from Monday if the start date is not a Monday
+  let currentDate = new Date(startDate);
+  if (currentDate.getDay() !== 1) { // If not Monday
+    const daysUntilMonday = (currentDate.getDay() === 0) ? 1 : 8 - currentDate.getDay();
+    currentDate.setDate(currentDate.getDate() - currentDate.getDay() + 1);
+  }
+  
+  // Fill the days with dates
+  for (let i = 0; i < 7; i++) {
+    const dayIndex = currentDate.getDay();
+    const dayName = dayNames[dayIndex];
+    result[dayName] = format(currentDate, 'dd.MM.yyyy');
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+  
+  return result;
+}
+
+// Format date range for title in Turkish format DD.MM-DD.MM.YYYY
+function formatDateRangeForTitle(startDate: Date, endDate: Date): string {
+  const startDay = format(startDate, 'dd.MM');
+  const endDay = format(endDate, 'dd.MM.yyyy');
+  return `${startDay}-${endDay}`;
+}
+
+// Translate payment methods to Turkish
+function translatePaymentMethod(method: string): string {
+  const translations: Record<string, string> = {
+    'Cash': 'Nakit',
+    'Bank Transfer': 'Banka Havalesi',
+    'Check': 'Çek',
+    'Credit Card': 'Kredi Kartı',
+  };
+  
+  return translations[method] || method;
+}

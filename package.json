@@ -1,0 +1,47 @@
+{
+  "name": "tahsilat-raporu",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "api": "python -m uvicorn api.index:app --reload --port 8000",
+    "dev:full": "concurrently \"npm run api\" \"npm run dev\"",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "setup": "python scripts/init.py",
+    "validate-db": "python scripts/validate_db.py"
+  },
+  "dependencies": {
+    "@chakra-ui/icons": "^2.2.4",
+    "@chakra-ui/react": "^2.8.1",
+    "@emotion/react": "^11.11.1",
+    "@emotion/styled": "^11.11.0",
+    "axios": "^1.6.0",
+    "concurrently": "^9.2.1",
+    "date-fns": "^4.1.0",
+    "formidable": "^3.5.4",
+    "framer-motion": "^10.16.4",
+    "http-proxy-middleware": "^3.0.5",
+    "multer": "^2.0.2",
+    "next": "^13.5.11",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "react-dropzone": "^14.2.3",
+    "react-icons": "^4.11.0",
+    "react-table": "^7.8.0",
+    "recharts": "^2.9.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/formidable": "^3.4.5",
+    "@types/node": "20.8.7",
+    "@types/react": "18.2.31",
+    "@types/react-dom": "18.2.14",
+    "eslint": "8.52.0",
+    "eslint-config-next": "13.5.6",
+    "typescript": "5.2.2"
+  }
+}
