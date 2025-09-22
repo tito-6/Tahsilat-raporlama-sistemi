@@ -6,7 +6,7 @@ import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { TCMBExchangeService } from '../../../lib/utils/tcmbExchangeService';
 
-// Helper function to parse Turkish date format (DD/MM/YYYY)
+// Helper function to parse Turkish date format (DD/MM/YYYY) and ISO dates (YYYY-MM-DD)
 function parseTurkishDate(dateStr: string | Date): Date {
   if (!dateStr) return new Date(); // Return current date as fallback
   
@@ -14,6 +14,15 @@ function parseTurkishDate(dateStr: string | Date): Date {
   if (dateStr instanceof Date) return dateStr;
   
   console.log(`Parsing date: ${dateStr}`);
+  
+  // Handle ISO format (YYYY-MM-DD) - this is what comes from weekly-list.ts
+  const isoFormatRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
+  const isoMatch = dateStr.match(isoFormatRegex);
+  if (isoMatch) {
+    const parsedDate = new Date(dateStr + 'T00:00:00.000Z');
+    console.log(`Parsed ISO format: ${dateStr} -> ${parsedDate.toISOString()}`);
+    return parsedDate;
+  }
   
   // Try parsing as Turkish format (DD/MM/YYYY or DD.MM.YYYY)
   // Handle DD/MM/YYYY format
