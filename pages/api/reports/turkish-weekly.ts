@@ -406,18 +406,36 @@ async function getCheckPayments(db: any, startDate: string, endDate: string) {
       if (weekData[dayName as keyof typeof weekData] && dayName !== 'sira_no' && dayName !== 'musteri_adi' && dayName !== 'proje' && dayName !== 'genel_toplam') {
         const dayData = (weekData as any)[dayName];
 
+        // Convert amounts based on currency using TCMB rates
         if (payment.currency_paid === 'TRY' || payment.currency_paid === 'TL') {
           dayData.tl = payment.amount_paid;
-          dayData.usd = payment.amount_paid / (payment.exchange_rate || 50);
+          // Convert TL to USD using TCMB selling rate
+          dayData.usd = TCMBExchangeService.convertCurrency(payment.amount_paid, 'TL', 'USD');
         } else if (payment.currency_paid === 'USD') {
           dayData.usd = payment.amount_paid;
-          dayData.tl = payment.amount_paid * (payment.exchange_rate || 50);
+          // Convert USD to TL using TCMB selling rate
+          dayData.tl = TCMBExchangeService.convertCurrency(payment.amount_paid, 'USD', 'TL');
+        } else if (payment.currency_paid === 'EUR') {
+          // Convert EUR to both USD and TL using TCMB rates
+          const usdAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'USD');
+          const tlAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'TL');
+          dayData.usd = usdAmount;
+          dayData.tl = tlAmount;
         }
 
         dayData.original_currency = payment.currency_paid;
 
-        weekData.genel_toplam.tl = dayData.tl;
-        weekData.genel_toplam.usd = dayData.usd;
+        // Update totals using TCMB rates
+        if (payment.currency_paid === 'TRY' || payment.currency_paid === 'TL') {
+          weekData.genel_toplam.tl = dayData.tl;
+          weekData.genel_toplam.usd = dayData.usd;
+        } else if (payment.currency_paid === 'USD') {
+          weekData.genel_toplam.usd = dayData.usd;
+          weekData.genel_toplam.tl = dayData.tl;
+        } else if (payment.currency_paid === 'EUR') {
+          weekData.genel_toplam.usd = dayData.usd;
+          weekData.genel_toplam.tl = dayData.tl;
+        }
         weekData.genel_toplam.original_currencies = [payment.currency_paid];
       }
 
