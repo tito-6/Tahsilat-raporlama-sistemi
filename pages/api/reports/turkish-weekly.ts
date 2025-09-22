@@ -19,7 +19,9 @@ function parseTurkishDate(dateStr: string | Date): Date {
   const isoFormatRegex = /^(\d{4})-(\d{2})-(\d{2})$/;
   const isoMatch = dateStr.match(isoFormatRegex);
   if (isoMatch) {
-    const parsedDate = new Date(dateStr + 'T00:00:00.000Z');
+    const [, year, month, day] = isoMatch;
+    // Parse as local date instead of UTC to avoid timezone issues
+    const parsedDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
     console.log(`Parsed ISO format: ${dateStr} -> ${parsedDate.toISOString()}`);
     return parsedDate;
   }
