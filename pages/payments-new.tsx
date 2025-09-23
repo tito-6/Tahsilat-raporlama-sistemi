@@ -751,6 +751,7 @@ const PaymentsPage: React.FC = () => {
                 </TabPanel>
               </TabPanels>
             </Tabs>
+          )}
 
             {/* Pagination */}
             {payments.length > 0 && (
