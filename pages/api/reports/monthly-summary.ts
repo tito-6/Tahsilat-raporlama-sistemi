@@ -1,7 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { getDbConnection, initializeDatabase } from '../../../lib/utils/database';
 
 // Helper function to convert currency to USD using TCMB rates
 async function convertToUSD(amount: number, currency: string): Promise<number> {
@@ -33,30 +31,35 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'year and month are required' });
     }
 
-    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-    const db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database
-    });
+    const dbPath = process.cwd();
+    
+    // Initialize PostgreSQL database
+    await initializeDatabase();
+    const client = await getDbConnection();
 
     const monthStr = month.toString().padStart(2, '0');
     const yearStr = year.toString();
 
     console.log(`Fetching monthly summary for ${monthStr}/${yearStr}`);
 
-    // Get all payments for the specified month using the DD/MM/YYYY format in payment_date
-    const payments = await db.all(`
+    // Get all payments for the specified month using PostgreSQL
+    const paymentsResult = await client.query(`
       SELECT 
         payment_method,
         currency_paid,
         amount_paid,
         exchange_rate,
-        account_name
+        account_type as account_name,
+        CASE 
+          WHEN currency_paid = 'USD' THEN amount_paid::numeric
+          ELSE amount_paid::numeric * exchange_rate::numeric
+        END as amount_usd
       FROM payments 
-      WHERE substr(payment_date, 4, 2) = ? 
-        AND substr(payment_date, 7, 4) = ?
-    `, [monthStr, yearStr]);
+      WHERE EXTRACT(YEAR FROM payment_date) = $1 
+        AND EXTRACT(MONTH FROM payment_date) = $2
+    `, [year, month]);
 
+    const payments = paymentsResult.rows;
     console.log(`Found ${payments.length} payments for ${monthStr}/${yearStr}`);
 
     // Group payments by payment method and project type
@@ -122,7 +125,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       general_summary['Toplam'].usd += usdAmount;
     }
 
-    await db.close();
+    client.release();
 
     const monthNames = [
       '', 'Ocak', 'Şubat', 'Mart', 'Nisan', 'Mayıs', 'Haziran',

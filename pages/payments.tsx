@@ -271,7 +271,7 @@ const PaymentsPage = () => {
       payment.project_name,
       payment.amount_paid,
       payment.currency_paid,
-      payment.amount_usd.toFixed(2),
+      payment.amount_usd?.toFixed(2) || '0.00',
       payment.exchange_rate,
       payment.exchange_rate_date || payment.payment_date,
       payment.payment_method,
@@ -365,12 +365,12 @@ const PaymentsPage = () => {
         </Stat>
         <Stat>
           <StatLabel>Page Total (USD)</StatLabel>
-          <StatNumber>${totalAmount.toFixed(2)}</StatNumber>
+          <StatNumber>${(totalAmount || 0).toFixed(2)}</StatNumber>
           <StatHelpText>Current page sum</StatHelpText>
         </Stat>
         <Stat>
           <StatLabel>Average Amount</StatLabel>
-          <StatNumber>${avgAmount.toFixed(2)}</StatNumber>
+          <StatNumber>${(avgAmount || 0).toFixed(2)}</StatNumber>
           <StatHelpText>Per payment</StatHelpText>
         </Stat>
         <Stat>
@@ -618,7 +618,7 @@ const PaymentsPage = () => {
                                 </Td>
                                 <Td>
                                   <Text fontWeight="semibold" color="green.600">
-                                    ${payment.amount_usd.toFixed(2)}
+                                    ${(payment.amount_usd || 0).toFixed(2)}
                                   </Text>
                                   {payment.currency_paid !== 'USD' && (
                                     <Text fontSize="xs" color="gray.500">
@@ -647,7 +647,7 @@ const PaymentsPage = () => {
                                         <Box>
                                           <Text fontWeight="bold">Currency Information</Text>
                                           <Text>Original Amount: {payment.currency_paid} {payment.amount_paid.toLocaleString()}</Text>
-                                          <Text>USD Equivalent: ${payment.amount_usd.toFixed(2)}</Text>
+                                          <Text>USD Equivalent: ${(payment.amount_usd || 0).toFixed(2)}</Text>
                                           <Text>Exchange Rate: {payment.exchange_rate}</Text>
                                           <Text>Rate Date: {formatDate(payment.exchange_rate_date || payment.payment_date)}</Text>
                                         </Box>
@@ -745,12 +745,12 @@ const PaymentsPage = () => {
                                 </Td>
                                 <Td>
                                   <Text fontWeight="semibold" color="green.600">
-                                    ${payment.amount_usd.toFixed(2)}
+                                    ${(payment.amount_usd || 0).toFixed(2)}
                                   </Text>
                                 </Td>
                                 <Td>
                                   <Text fontWeight="medium">
-                                    {payment.exchange_rate.toFixed(4)}
+                                    {(payment.exchange_rate || 0).toFixed(4)}
                                   </Text>
                                 </Td>
                                 <Td>

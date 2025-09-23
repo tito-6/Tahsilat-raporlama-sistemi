@@ -1,8 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
 import { getDbConnection, initializeDatabase } from '../../../lib/utils/database';
-import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
@@ -22,40 +19,42 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       pgClient.release();
       return res.status(200).json({
         success: true,
-        message: `PostgreSQL already has ${existingCount} records. Migration not needed.`,
+        message: `PostgreSQL already has ${existingCount} records. Database initialized successfully.`,
         existingRecords: existingCount
       });
     }
 
-    // Try to read from SQLite database
-    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-    let sqliteData: any[] = [];
+    // Add some sample data for testing
+    const samplePayments = [
+      {
+        customer_name: 'Test Customer 1',
+        payment_date: '2024-01-15',
+        amount_paid: 50000,
+        currency_paid: 'TRY',
+        exchange_rate: 1.0,
+        exchange_rate_date: '2024-01-15',
+        payment_method: 'Bank Transfer',
+        account_type: 'TRY Account',
+        project_name: 'Test Project',
+        notes: 'Sample payment for testing'
+      },
+      {
+        customer_name: 'Test Customer 2',
+        payment_date: '2024-01-20',
+        amount_paid: 1500,
+        currency_paid: 'EUR',
+        exchange_rate: 32.5,
+        exchange_rate_date: '2024-01-20',
+        payment_method: 'Cash',
+        account_type: 'EUR Account',
+        project_name: 'Test Project 2',
+        notes: 'Another sample payment'
+      }
+    ];
 
-    try {
-      const sqliteDb = await open({
-        filename: dbPath,
-        driver: sqlite3.Database
-      });
-
-      // Get all payments from SQLite
-      sqliteData = await sqliteDb.all('SELECT * FROM payments ORDER BY id');
-      await sqliteDb.close();
-      
-      console.log(`Found ${sqliteData.length} records in SQLite database`);
-    } catch (sqliteError) {
-      console.log('Could not read SQLite database:', sqliteError);
-      pgClient.release();
-      return res.status(200).json({
-        success: true,
-        message: 'SQLite database not found or empty. Starting with clean PostgreSQL database.',
-        migratedRecords: 0
-      });
-    }
-
-    // Migrate data to PostgreSQL
-    let migratedCount = 0;
+    let insertedCount = 0;
     
-    for (const payment of sqliteData) {
+    for (const payment of samplePayments) {
       try {
         await pgClient.query(`
           INSERT INTO payments (
@@ -75,7 +74,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           payment.project_name,
           payment.notes
         ]);
-        migratedCount++;
+        insertedCount++;
       } catch (insertError) {
         console.error('Error inserting payment:', insertError, payment);
       }
@@ -85,13 +84,13 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     res.status(200).json({
       success: true,
-      message: `Successfully migrated ${migratedCount} records from SQLite to PostgreSQL`,
-      migratedRecords: migratedCount,
-      totalFound: sqliteData.length
+      message: `Successfully initialized PostgreSQL database with ${insertedCount} sample records`,
+      insertedRecords: insertedCount,
+      totalRecords: insertedCount
     });
 
   } catch (error) {
-    console.error('Migration error:', error);
+    console.error('Database initialization error:', error);
     res.status(500).json({
       success: false,
       error: error instanceof Error ? error.message : 'Unknown error'

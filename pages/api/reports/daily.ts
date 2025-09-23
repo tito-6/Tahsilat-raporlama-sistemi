@@ -1,7 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { getDbConnection, initializeDatabase } from '../../../lib/utils/database';
 
 // Helper function to parse Turkish date format (DD/MM/YYYY)
 function parseTurkishDate(dateStr: string | Date): Date {
@@ -58,59 +56,77 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     
     console.log(`Daily Report - Date Range: ${start_date} to ${end_date}`);
 
-    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-    const db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database
-    });
+    // Initialize PostgreSQL database
+    await initializeDatabase();
+    const client = await getDbConnection();
 
-    // Daily USD report query
-    const dailyReports = await db.all(`
-      SELECT 
-        payment_date,
-        SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as total_usd,
-        COUNT(*) as transaction_count,
-        GROUP_CONCAT(DISTINCT payment_method) as payment_methods
-      FROM payments 
-      WHERE payment_date BETWEEN ? AND ?
-      GROUP BY payment_date
-      ORDER BY payment_date ASC
-    `, [start_date, end_date]);
+    let dailyReportsResult, summaryResult, topCustomersResult;
+    try {
+      dailyReportsResult = await client.query(`
+        SELECT 
+          payment_date,
+          SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as total_usd,
+          COUNT(*) as transaction_count,
+          STRING_AGG(DISTINCT payment_method, ', ') as payment_methods
+        FROM payments 
+        WHERE payment_date BETWEEN $1 AND $2
+        GROUP BY payment_date
+        ORDER BY payment_date ASC
+      `, [start_date, end_date]);
+    } catch (err) {
+      console.error('Error in dailyReports query:', err);
+      client.release();
+      return res.status(500).json({ success: false, error: 'dailyReports query failed', message: err instanceof Error ? err.message : String(err) });
+    }
 
-    // Summary statistics
-    const summary = await db.get(`
-      SELECT 
-        COUNT(*) as total_count,
-        SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as total_usd,
-        COUNT(DISTINCT customer_name) as unique_customers,
-        COUNT(DISTINCT project_name) as unique_projects,
-        SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) / 
-        (julianday(?) - julianday(?) + 1) as average_usd_per_day
-      FROM payments 
-      WHERE payment_date BETWEEN ? AND ?
-    `, [end_date, start_date, start_date, end_date]);
+    try {
+      summaryResult = await client.query(`
+        SELECT 
+          COUNT(*) as total_count,
+          SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as total_usd,
+          COUNT(DISTINCT customer_name) as unique_customers,
+          COUNT(DISTINCT project_name) as unique_projects,
+          CASE 
+            WHEN ($2::date - $1::date + 1) > 0 
+            THEN SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END)::numeric / 
+                 ($2::date - $1::date + 1)::numeric
+            ELSE 0
+          END as average_usd_per_day
+        FROM payments 
+        WHERE payment_date BETWEEN $1 AND $2
+      `, [start_date, end_date]);
+    } catch (err) {
+      console.error('Error in summary query:', err);
+      client.release();
+      return res.status(500).json({ success: false, error: 'summary query failed', message: err instanceof Error ? err.message : String(err) });
+    }
 
-    // Top customers
-    const topCustomers = await db.all(`
-      SELECT 
-        customer_name,
-        SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as total_usd,
-        COUNT(*) as transaction_count
-      FROM payments 
-      WHERE payment_date BETWEEN ? AND ?
-      GROUP BY customer_name
-      ORDER BY total_usd DESC
-      LIMIT 10
-    `, [start_date, end_date]);
+    try {
+      topCustomersResult = await client.query(`
+        SELECT 
+          customer_name,
+          SUM(CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END) as total_usd,
+          COUNT(*) as transaction_count
+        FROM payments 
+        WHERE payment_date BETWEEN $1 AND $2
+        GROUP BY customer_name
+        ORDER BY total_usd DESC
+        LIMIT 10
+      `, [start_date, end_date]);
+    } catch (err) {
+      console.error('Error in topCustomers query:', err);
+      client.release();
+      return res.status(500).json({ success: false, error: 'topCustomers query failed', message: err instanceof Error ? err.message : String(err) });
+    }
 
-    await db.close();
+    client.release();
 
     res.status(200).json({
       success: true,
       data: {
-        daily_reports: dailyReports,
-        summary,
-        top_customers: topCustomers
+        daily_reports: dailyReportsResult.rows,
+        summary: summaryResult.rows[0] || {},
+        top_customers: topCustomersResult.rows
       },
       period: {
         start_date,

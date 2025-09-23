@@ -3,8 +3,7 @@ import formidable from 'formidable';
 import * as XLSX from 'xlsx';
 import fs from 'fs';
 import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { getDbConnection, initializeDatabase } from '../../../lib/utils/database';
 
 export const config = {
   api: {
@@ -330,11 +329,9 @@ function parseAmount(amountStr: string | number): number {
 }
 
 async function insertPaymentData(data: any[]) {
-  const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-  const db = await open({
-    filename: dbPath,
-    driver: sqlite3.Database
-  });
+  // Initialize PostgreSQL database
+  await initializeDatabase();
+  const client = await getDbConnection();
 
   const results: {
     inserted: number;
@@ -345,7 +342,7 @@ async function insertPaymentData(data: any[]) {
   };
 
   try {
-    await db.exec('BEGIN TRANSACTION');
+    await client.query('BEGIN');
 
     for (const row of data) {
       try {
@@ -462,53 +459,61 @@ async function insertPaymentData(data: any[]) {
         
         // Ensure all required fields are present with defaults
         const requiredFields = [
-          'customer_name', 'sales_person', 'activity_no', 'payment_date', 'payment_method',
-          'account_name', 'amount_due', 'currency_due', 'amount_paid', 'currency_paid',
-          'exchange_rate', 'is_deposit', 'year', 'month', 'description', 'property_units',
-          'project_name', 'account_description', 'check_due_date', 'agency_name', 'status'
+          'customer_name', 'payment_date', 'payment_method',
+          'amount_paid', 'currency_paid', 'exchange_rate', 'project_name', 'notes'
         ];
         
         for (const field of requiredFields) {
           if (mappedData[field] === undefined) {
-            if (['amount_paid', 'amount_due', 'exchange_rate'].includes(field)) {
+            if (['amount_paid', 'exchange_rate'].includes(field)) {
               mappedData[field] = 0;
-            } else if (['currency_paid', 'currency_due'].includes(field)) {
+            } else if (field === 'currency_paid') {
               mappedData[field] = 'TRY';
-            } else if (field === 'is_deposit') {
-              mappedData[field] = 0;
-            } else if (field === 'year') {
-              mappedData[field] = new Date().getFullYear();
-            } else if (field === 'month') {
-              mappedData[field] = new Date().getMonth() + 1;
             } else {
               mappedData[field] = '';
             }
           }
         }
         
+        // Map legacy fields to new simplified schema
+        const paymentData = {
+          customer_name: mappedData.customer_name || '',
+          payment_date: mappedData.payment_date,
+          amount_paid: mappedData.amount_paid || 0,
+          currency_paid: mappedData.currency_paid || 'TRY',
+          exchange_rate: mappedData.exchange_rate || 1.0,
+          exchange_rate_date: mappedData.payment_date, // Use payment date as exchange rate date
+          payment_method: mappedData.payment_method || '',
+          account_type: mappedData.account_name || 'TRY Account',
+          project_name: mappedData.project_name || '',
+          notes: mappedData.description || ''
+        };
+        
         // Log the mapped data for debugging
         console.log(`Row ${results.inserted + 1} - Mapped Data:`, {
-          payment_date: mappedData.payment_date,
-          amount_paid: mappedData.amount_paid,
-          currency_paid: mappedData.currency_paid
+          payment_date: paymentData.payment_date,
+          amount_paid: paymentData.amount_paid,
+          currency_paid: paymentData.currency_paid
         });
 
-        // Insert into payments table
-        await db.run(`
+        // Insert into payments table using simplified schema
+        await client.query(`
           INSERT INTO payments (
-            customer_name, sales_person, activity_no, payment_date, payment_method,
-            account_name, amount_due, currency_due, amount_paid, currency_paid,
-            exchange_rate, is_deposit, year, month, description, property_units,
-            project_name, account_description, check_due_date, agency_name, status
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            customer_name, payment_date, amount_paid, currency_paid, 
+            exchange_rate, exchange_rate_date, payment_method, 
+            account_type, project_name, notes
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         `, [
-          mappedData.customer_name, mappedData.sales_person, mappedData.activity_no,
-          mappedData.payment_date, mappedData.payment_method, mappedData.account_name,
-          mappedData.amount_due, mappedData.currency_due, mappedData.amount_paid,
-          mappedData.currency_paid, mappedData.exchange_rate, mappedData.is_deposit,
-          mappedData.year, mappedData.month, mappedData.description,
-          mappedData.property_units, mappedData.project_name, mappedData.account_description,
-          mappedData.check_due_date, mappedData.agency_name, mappedData.status
+          paymentData.customer_name,
+          paymentData.payment_date,
+          paymentData.amount_paid,
+          paymentData.currency_paid,
+          paymentData.exchange_rate,
+          paymentData.exchange_rate_date,
+          paymentData.payment_method,
+          paymentData.account_type,
+          paymentData.project_name,
+          paymentData.notes
         ]);
 
         results.inserted++;
@@ -519,15 +524,15 @@ async function insertPaymentData(data: any[]) {
       }
     }
 
-    await db.exec('COMMIT');
+    await client.query('COMMIT');
     console.log(`Successfully inserted ${results.inserted} payment records`);
   } catch (error) {
-    await db.exec('ROLLBACK');
+    await client.query('ROLLBACK');
     console.error('Transaction error:', error);
     const errorMessage = error instanceof Error ? error.message : String(error);
     results.errors.push(`Transaction failed: ${errorMessage}`);
   } finally {
-    await db.close();
+    client.release();
   }
 
   return results;

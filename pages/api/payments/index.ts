@@ -132,10 +132,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const offset = (pageNum - 1) * limitNum;
     const totalPages = Math.ceil(totalRecords / limitNum);
 
-    // Get payments with pagination
+    // Get payments with pagination and calculate USD amounts
     const orderClause = `ORDER BY ${sort_by} ${sort_order}`;
     const paymentsQuery = `
-      SELECT * FROM payments 
+      SELECT *, 
+        CASE 
+          WHEN currency_paid = 'USD' THEN amount_paid::numeric 
+          ELSE amount_paid::numeric * exchange_rate::numeric 
+        END as amount_usd
+      FROM payments 
       ${whereClause} 
       ${orderClause} 
       LIMIT $${paramIndex} OFFSET $${paramIndex + 1}

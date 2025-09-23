@@ -1,7 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { initializeDatabase, getDbConnection } from '../../../lib/utils/database';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
@@ -15,14 +13,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET');
   
-  let db: any = null;
+  let client: any = null;
   
   try {
     // Call auto-generate endpoint if force parameter is provided
     if (req.query.force === 'true') {
       try {
-        const baseUrl = process.env.VERCEL_URL 
-          ? `https://${process.env.VERCEL_URL}` 
+        const baseUrl = process.env.NETLIFY_URL 
+          ? `https://${process.env.NETLIFY_URL}` 
           : (req.headers.origin || 'http://localhost:3000');
         
         console.log('Regenerating reports from:', `${baseUrl}/api/reports/auto-generate`);
@@ -45,20 +43,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Get date range of all payments
-    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-    db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database
-    });
-
-    // Add timeout to the database connection
-    await db.run('PRAGMA busy_timeout = 5000');
+    await initializeDatabase();
+    client = await getDbConnection();
     
     // First check if we have any payments
-    const paymentCount = await db.get('SELECT COUNT(*) as count FROM payments WHERE payment_date IS NOT NULL AND payment_date != ""');
+    const paymentCountResult = await client.query('SELECT COUNT(*) as count FROM payments WHERE payment_date IS NOT NULL');
+    const paymentCount = paymentCountResult.rows[0];
     
     if (!paymentCount || paymentCount.count === 0) {
-      await db.close();
+      client.release();
       return res.status(200).json({
         success: true,
         data: {
@@ -68,18 +61,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    const dateRange = await db.get(`
+    const dateRangeResult = await client.query(`
       SELECT 
         MIN(payment_date) as first_payment,
         MAX(payment_date) as last_payment
       FROM payments
-      WHERE payment_date IS NOT NULL AND payment_date != ''
+      WHERE payment_date IS NOT NULL
     `);
+
+    const dateRange = dateRangeResult.rows[0];
 
     console.log('Weekly-list dateRange:', dateRange);
 
     if (!dateRange || !dateRange.first_payment || !dateRange.last_payment) {
-      await db.close();
+      client.release();
       return res.status(200).json({
         success: true,
         data: {
@@ -89,9 +84,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       });
     }
 
-    // Parse dates using our Turkish date parsing helper
-    const firstPaymentDate = parseTurkishDate(dateRange.first_payment);
-    const lastPaymentDate = parseTurkishDate(dateRange.last_payment);
+    // Parse dates - PostgreSQL returns Date objects directly
+    const firstPaymentDate = new Date(dateRange.first_payment);
+    const lastPaymentDate = new Date(dateRange.last_payment);
 
     console.log('Weekly-list parsing dates:', {
       first_raw: dateRange.first_payment,
@@ -106,7 +101,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // Validate parsed dates
     if (isNaN(firstPaymentDate.getTime()) || isNaN(lastPaymentDate.getTime())) {
-      await db.close();
+      client.release();
       return res.status(200).json({
         success: true,
         data: {
@@ -156,10 +151,10 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 
     // For performance, use a single query to get counts for all week ranges
     if (weekRanges.length > 0) {
-      const placeholders = weekRanges.map(() => '(?,?)').join(',');
+      const placeholders = weekRanges.map((_, index) => `($${index * 2 + 1}, $${index * 2 + 2})`).join(',');
       const params = weekRanges.flatMap(week => [week.week_start, week.week_end]);
       
-      // Build a query that converts payment dates to ISO format for comparison
+      // Build a query for PostgreSQL
       const query = `
         WITH ranges(start_date, end_date) AS (
           VALUES ${placeholders}
@@ -170,22 +165,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           COUNT(payments.id) as count
         FROM ranges
         LEFT JOIN payments ON 
-          date(
-            CASE 
-              WHEN payment_date LIKE '%/%/%' THEN 
-                substr(payment_date, 7, 4) || '-' || 
-                substr('0' || substr(payment_date, 4, 2), -2, 2) || '-' || 
-                substr('0' || substr(payment_date, 1, 2), -2, 2)
-              ELSE payment_date
-            END
-          ) BETWEEN date(ranges.start_date) AND date(ranges.end_date)
+          payments.payment_date BETWEEN ranges.start_date::date AND ranges.end_date::date
         GROUP BY ranges.start_date, ranges.end_date
       `;
       
-      const results = await db.all(query, ...params);
+      const results = await client.query(query, params);
       
       // Update the has_data flag for each week range
-      for (const result of results) {
+      for (const result of results.rows) {
         const weekRange = weekRanges.find(
           w => w.week_start === result.start_date && w.week_end === result.end_date
         );
@@ -195,8 +182,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       }
     }
 
-    await db.close();
-    db = null;
+    client.release();
 
     res.status(200).json({
       success: true,
@@ -209,9 +195,9 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     console.error('Weekly reports list error:', error);
     
     // Close DB connection if still open
-    if (db) {
+    if (client) {
       try {
-        await db.close();
+        client.release();
       } catch (closeErr) {
         console.error('Error closing database connection:', closeErr);
       }
