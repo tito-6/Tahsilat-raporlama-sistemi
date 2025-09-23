@@ -954,7 +954,7 @@ const ReportsPage = () => {
                 <tbody>
                   ${(() => {
                     // Combine weekly reports and check payments to get complete project totals
-                    const projectTotals: {[key: string]: number} = {};
+                    const projectTotals: { [key: string]: number } = {};
                     
                     // Add weekly report data
                     if (data.weekly_report) {

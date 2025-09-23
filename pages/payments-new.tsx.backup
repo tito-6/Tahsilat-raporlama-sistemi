@@ -532,7 +532,6 @@ const PaymentsPage: React.FC = () => {
               No payments found with current filters. Try adjusting your search criteria or import data to see payment records.
             </Alert>
           ) : (
-            <>
             <Tabs isLazy variant="enclosed">
               <TabList mb="1em">
                 <Tab>Standard View</Tab>
@@ -799,8 +798,6 @@ const PaymentsPage: React.FC = () => {
                 </HStack>
               </Flex>
             )}
-            </>
-          )}
         </CardBody>
       </Card>
     </Box>

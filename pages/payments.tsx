@@ -111,11 +111,16 @@ const PaymentsPage = () => {
   const [payments, setPayments] = useState<Payment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [filterOptions, setFilterOptions] = useState({
-    payment_methods: [] as string[],
-    currencies: [] as string[],
-    projects: [] as string[],
-    customers: [] as string[]
+  const [filterOptions, setFilterOptions] = useState<{
+    payment_methods: string[];
+    currencies: string[];
+    projects: string[];
+    customers: string[];
+  }>({
+    payment_methods: [],
+    currencies: [],
+    projects: [],
+    customers: []
   });
   
   // Expanded row state

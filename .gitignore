@@ -1,101 +1,65 @@
-# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-
-# Dependencies
-/node_modules
-/.pnp
-.pnp.js
-
-# Production builds
-/.next/
-/out/
-/build
-/dist
-
-# Environment variables
-.env
+# Add project-specific local files to ignore here
+# Local environment variables
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+
+# Dependency directories
+/node_modules
+/.pnp
+.pnp.js
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Build outputs
+/.next/
+/out/
+/build
+/dist
 
 # Debug logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
-lerna-debug.log*
 
-# Runtime data
-pids
-*.pid
-*.seed
-*.pid.lock
-
-# Coverage directory used by tools like istanbul
+# Testing
 /coverage
-/.nyc_output
 
-# Dependency directories
-node_modules/
-jspm_packages/
-
-# TypeScript build output
-*.tsbuildinfo
-next-env.d.ts
-
-# Optional npm cache directory
-.npm
-
-# Optional eslint cache
-.eslintcache
-
-# Microbundle cache
-.rpt2_cache/
-.rts2_cache_cjs/
-.rts2_cache_es/
-.rts2_cache_umd/
-
-# Optional REPL history
-.node_repl_history
-
-# Output of 'npm pack'
-*.tgz
-
-# Yarn Integrity file
-.yarn-integrity
+# Misc
+.DS_Store
+*.pem
 
 # Vercel
 .vercel
 
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-env/
-venv/
-.venv/
-ENV/
-env.bak/
-venv.bak/
-pip-log.txt
-pip-delete-this-directory.txt
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
 
-# Database files (keep these out of git for security)
+# IDE files
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Database files
 *.sqlite
 *.sqlite3
 *.db
 tahsilat_data.db
-
-# Backup files
 /backups/
 *.bak
-*.backup
 
-# Temporary and debug files
-tmp/
-temp/
+# Debug and temporary files
 debug_*.py
 debug_*.js
 *_debug.py
@@ -103,34 +67,5 @@ debug_*.js
 api_response.json
 debug_response.json
 response.json
-simple_debug.py
-debug_records.js
-debug_ozc_payments.py
-test-*.js
-
-# IDE and editor files
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-*.pem
-
-# OS generated files
-Thumbs.db
-ehthumbs.db
-Desktop.ini
-$RECYCLE.BIN/
-
-# Logs
-logs
-*.log
-
-# Runtime files
-*.pid
-*.seed
-*.pid.lock
-
-# Optional cache directories
-.cache/
-.parcel-cache/
+tmp/
+temp/
