@@ -954,11 +954,11 @@ const ReportsPage = () => {
                 <tbody>
                   ${(() => {
                     // Combine weekly reports and check payments to get complete project totals
-                    const projectTotals = {};
+                    const projectTotals: {[key: string]: number} = {};
                     
                     // Add weekly report data
                     if (data.weekly_report) {
-                      data.weekly_report.forEach((row) => {
+                      data.weekly_report.forEach((row: any) => {
                         const project = row.proje;
                         if (!projectTotals[project]) projectTotals[project] = 0;
                         projectTotals[project] += row.genel_toplam?.usd || 0;
@@ -967,7 +967,7 @@ const ReportsPage = () => {
                     
                     // Add check payment data
                     if (data.check_payments) {
-                      data.check_payments.forEach((row) => {
+                      data.check_payments.forEach((row: any) => {
                         const project = row.proje;
                         if (!projectTotals[project]) projectTotals[project] = 0;
                         projectTotals[project] += row.genel_toplam?.usd || 0;
@@ -977,7 +977,7 @@ const ReportsPage = () => {
                     return Object.entries(projectTotals).map(([project, total]) => `
                       <tr>
                         <td style="text-align: left;">${project}</td>
-                        <td>$${formatCurrencyForPrint(total)}</td>
+                        <td>$${formatCurrencyForPrint(total as number)}</td>
                       </tr>
                     `).join('');
                   })()}
@@ -985,12 +985,12 @@ const ReportsPage = () => {
                     // Calculate total from all projects
                     let grandTotal = 0;
                     if (data.weekly_report) {
-                      data.weekly_report.forEach((row) => {
+                      data.weekly_report.forEach((row: any) => {
                         grandTotal += row.genel_toplam?.usd || 0;
                       });
                     }
                     if (data.check_payments) {
-                      data.check_payments.forEach((row) => {
+                      data.check_payments.forEach((row: any) => {
                         grandTotal += row.genel_toplam?.usd || 0;
                       });
                     }
