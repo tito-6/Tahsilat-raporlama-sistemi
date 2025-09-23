@@ -173,7 +173,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       // Map day names in Turkish
       const dayNames = ['pazar', 'pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi'];
 
-      dailyPayments.forEach(payment => {
+      dailyPayments.forEach((payment: any) => {
         const paymentDate = parseTurkishDate(payment.payment_date);
         const dayIndex = paymentDate.getDay();
         const dayName = dayNames[dayIndex];

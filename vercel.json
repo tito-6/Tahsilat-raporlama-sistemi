@@ -1,11 +1,5 @@
 {
   "version": 2,
-  "builds": [
-    {
-      "src": "package.json",
-      "use": "@vercel/next"
-    }
-  ],
   "env": {
     "AUTH_USERNAME": "innogy",
     "AUTH_PASSWORD": "tahsilat2025"
@@ -26,7 +20,7 @@
     }
   ],
   "functions": {
-    "pages/api/**/*.ts": {
+    "api/**/*.py": {
       "maxDuration": 30
     }
   }
