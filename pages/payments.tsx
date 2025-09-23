@@ -153,7 +153,7 @@ const PaymentsPage = () => {
 
   useEffect(() => {
     fetchPayments();
-  }, [pagination.page, pagination.limit, sorting]);
+  }, [pagination.page, pagination.limit, sorting, filters]);
 
   const fetchPayments = async () => {
     try {
@@ -194,7 +194,6 @@ const PaymentsPage = () => {
 
   const applyFilters = () => {
     setPagination(prev => ({ ...prev, page: 1 }));
-    fetchPayments();
   };
 
   const clearFilters = () => {
@@ -532,7 +531,7 @@ const PaymentsPage = () => {
               <Tabs isLazy variant="enclosed">
                 <TabList mb="1em">
                   <Tab>Standard View</Tab>
-                  <Tab>USD Conversion View</Tab>
+                  <Tab>Converted Payments Only</Tab>
                 </TabList>
                 
                 <TabPanels>
@@ -698,51 +697,63 @@ const PaymentsPage = () => {
                           </Tr>
                         </Thead>
                         <Tbody>
-                          {payments.map((payment) => (
-                            <Tr key={payment.id} _hover={{ bg: "gray.50" }}>
-                              <Td>{formatDate(payment.payment_date)}</Td>
-                              <Td>
-                                <Text fontWeight="medium">{payment.customer_name}</Text>
+                          {payments
+                            .filter(payment => payment.currency_paid !== 'USD') // Only show non-USD payments that were converted
+                            .length === 0 ? (
+                            <Tr>
+                              <Td colSpan={7} textAlign="center" py={8}>
+                                <Alert status="info" variant="subtle">
+                                  <AlertIcon />
+                                  <Box>
+                                    <Text fontWeight="medium">No currency conversions found</Text>
+                                    <Text fontSize="sm" color="gray.600">
+                                      This tab shows only payments that were converted from other currencies (TL, EUR) to USD. 
+                                      All current payments are already in USD.
+                                    </Text>
+                                  </Box>
+                                </Alert>
                               </Td>
-                              <Td>
-                                <Badge colorScheme="purple" variant="subtle">
-                                  {payment.project_name}
-                                </Badge>
-                              </Td>
-                              <Td>
-                                <Text fontWeight="bold">
-                                  {payment.currency_paid === 'TRY' ? '₺' : 
-                                   payment.currency_paid === 'USD' ? '$' : 
-                                   payment.currency_paid === 'EUR' ? '€' : ''}
-                                  {payment.amount_paid.toLocaleString()}
-                                </Text>
-                                <Text fontSize="xs" color="gray.500">
-                                  {payment.currency_paid}
-                                </Text>
-                              </Td>
-                              <Td>
-                                <Text fontWeight="semibold" color="green.600">
-                                  ${payment.amount_usd.toFixed(2)}
-                                </Text>
-                              </Td>
-                              <Td>
-                                {payment.currency_paid !== 'USD' ? (
+                            </Tr>
+                          ) : (
+                            payments
+                              .filter(payment => payment.currency_paid !== 'USD') // Only show non-USD payments that were converted
+                              .map((payment) => (
+                              <Tr key={payment.id} _hover={{ bg: "gray.50" }}>
+                                <Td>{formatDate(payment.payment_date)}</Td>
+                                <Td>
+                                  <Text fontWeight="medium">{payment.customer_name}</Text>
+                                </Td>
+                                <Td>
+                                  <Badge colorScheme="purple" variant="subtle">
+                                    {payment.project_name}
+                                  </Badge>
+                                </Td>
+                                <Td>
+                                  <Text fontWeight="bold">
+                                    {payment.currency_paid === 'TRY' || payment.currency_paid === 'TL' ? '₺' : 
+                                     payment.currency_paid === 'EUR' ? '€' : ''}
+                                    {payment.amount_paid.toLocaleString()}
+                                  </Text>
+                                  <Text fontSize="xs" color="gray.500">
+                                    {payment.currency_paid}
+                                  </Text>
+                                </Td>
+                                <Td>
+                                  <Text fontWeight="semibold" color="green.600">
+                                    ${payment.amount_usd.toFixed(2)}
+                                  </Text>
+                                </Td>
+                                <Td>
                                   <Text fontWeight="medium">
                                     {payment.exchange_rate.toFixed(4)}
                                   </Text>
-                                ) : (
-                                  <Text color="gray.500">-</Text>
-                                )}
-                              </Td>
-                              <Td>
-                                {payment.currency_paid !== 'USD' ? (
+                                </Td>
+                                <Td>
                                   <Text>{formatDate(payment.exchange_rate_date || payment.payment_date)}</Text>
-                                ) : (
-                                  <Text color="gray.500">-</Text>
-                                )}
-                              </Td>
-                            </Tr>
-                          ))}
+                                </Td>
+                              </Tr>
+                            ))
+                          )}
                         </Tbody>
                       </Table>
                     </TableContainer>

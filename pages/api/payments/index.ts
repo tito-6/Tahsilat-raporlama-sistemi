@@ -101,15 +101,33 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     if (start_date) {
-      whereConditions.push(`payment_date >= ?`);
+      // Convert ISO date (YYYY-MM-DD) to Turkish format (DD/MM/YYYY) for comparison
+      const startDate = new Date(start_date as string);
+      const startDateTurkish = `${startDate.getDate().toString().padStart(2, '0')}/${(startDate.getMonth() + 1).toString().padStart(2, '0')}/${startDate.getFullYear()}`;
+      whereConditions.push(`
+        DATE(
+          substr(payment_date, 7, 4) || '-' || 
+          substr(payment_date, 4, 2) || '-' || 
+          substr(payment_date, 1, 2)
+        ) >= DATE(?)
+      `);
       params.push(start_date);
-      console.log(`Filtering payments from date: ${start_date}`);
+      console.log(`Filtering payments from date: ${start_date} (${startDateTurkish})`);
     }
 
     if (end_date) {
-      whereConditions.push(`payment_date <= ?`);
+      // Convert ISO date (YYYY-MM-DD) to Turkish format (DD/MM/YYYY) for comparison
+      const endDate = new Date(end_date as string);
+      const endDateTurkish = `${endDate.getDate().toString().padStart(2, '0')}/${(endDate.getMonth() + 1).toString().padStart(2, '0')}/${endDate.getFullYear()}`;
+      whereConditions.push(`
+        DATE(
+          substr(payment_date, 7, 4) || '-' || 
+          substr(payment_date, 4, 2) || '-' || 
+          substr(payment_date, 1, 2)
+        ) <= DATE(?)
+      `);
       params.push(end_date);
-      console.log(`Filtering payments to date: ${end_date}`);
+      console.log(`Filtering payments to date: ${end_date} (${endDateTurkish})`);
     }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
@@ -147,7 +165,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         payment_date as exchange_rate_date, -- Using payment_date as exchange_rate_date
         year,
         month,
-        CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END as amount_usd
+        CASE 
+          WHEN currency_paid = 'USD' THEN amount_paid 
+          WHEN currency_paid = 'TL' OR currency_paid = 'TRY' THEN amount_paid * 0.029
+          WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
+          ELSE amount_paid * 0.029
+        END as amount_usd
       FROM payments 
       ${whereClause}
       ORDER BY ${sortColumn} ${sortDirection}

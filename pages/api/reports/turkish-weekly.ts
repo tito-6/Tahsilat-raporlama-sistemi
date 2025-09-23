@@ -6,6 +6,24 @@ import { format } from 'date-fns';
 import { tr } from 'date-fns/locale';
 import { TCMBExchangeService } from '../../../lib/utils/tcmbExchangeService';
 
+// Helper function to convert currency to USD using TCMB rates
+async function convertToUSD(amount: number, currency: string): Promise<number> {
+  // Use STANDARD exchange rate logic - same as payments and reports
+  const STANDARD_TL_TO_USD_RATE = 0.029;
+  const STANDARD_EUR_TO_USD_RATE = 1.1;
+  
+  if (currency === 'USD') {
+    return amount;
+  } else if (currency === 'TL' || currency === 'TRY') {
+    return amount * STANDARD_TL_TO_USD_RATE;
+  } else if (currency === 'EUR') {
+    return amount * STANDARD_EUR_TO_USD_RATE;
+  } else {
+    // Fallback for any other currency - treat as TL
+    return amount * STANDARD_TL_TO_USD_RATE;
+  }
+}
+
 // Helper function to parse Turkish date format (DD/MM/YYYY) and ISO dates (YYYY-MM-DD)
 function parseTurkishDate(dateStr: string | Date): Date {
   if (!dateStr) return new Date(); // Return current date as fallback
@@ -185,38 +203,31 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
         if (weekData[dayName as keyof typeof weekData] && dayName !== 'sira_no' && dayName !== 'musteri_adi' && dayName !== 'proje' && dayName !== 'genel_toplam') {
           const dayData = (weekData as any)[dayName];
 
-          // Convert amounts based on currency using TCMB rates
-          if (payment.currency_paid === 'TRY' || payment.currency_paid === 'TL') {
-            dayData.tl += payment.amount_paid;
-            // Convert TL to USD using TCMB selling rate
-            dayData.usd += TCMBExchangeService.convertCurrency(payment.amount_paid, 'TL', 'USD');
-          } else if (payment.currency_paid === 'USD') {
-            dayData.usd += payment.amount_paid;
-            // Convert USD to TL using TCMB selling rate
-            dayData.tl += TCMBExchangeService.convertCurrency(payment.amount_paid, 'USD', 'TL');
+          // Use STANDARD logic for ALL payments: Convert TL to USD using consistent rate
+          const STANDARD_TL_TO_USD_RATE = 0.029; // Standard exchange rate for all TL payments
+          
+          let amount_usd;
+          if (payment.currency_paid === 'USD') {
+            amount_usd = payment.amount_paid;
+          } else if (payment.currency_paid === 'TL' || payment.currency_paid === 'TRY') {
+            // Convert TL to USD using STANDARD rate for ALL TL payments
+            amount_usd = payment.amount_paid * STANDARD_TL_TO_USD_RATE;
           } else if (payment.currency_paid === 'EUR') {
-            // Convert EUR to both USD and TL using TCMB rates
-            const usdAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'USD');
-            const tlAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'TL');
-            dayData.usd += usdAmount;
-            dayData.tl += tlAmount;
+            // Convert EUR to USD using standard rate
+            amount_usd = payment.amount_paid * 1.1; // Standard EUR to USD rate
+          } else {
+            // Fallback for any other currency
+            amount_usd = payment.amount_paid * STANDARD_TL_TO_USD_RATE;
           }
+          
+          dayData.usd += amount_usd;
+          dayData.tl += payment.amount_paid; // Keep original amount in TL column
 
           dayData.original_currency = payment.currency_paid;
 
-          // Update totals using TCMB rates
-          if (payment.currency_paid === 'TRY' || payment.currency_paid === 'TL') {
-            weekData.genel_toplam.tl += payment.amount_paid;
-            weekData.genel_toplam.usd += TCMBExchangeService.convertCurrency(payment.amount_paid, 'TL', 'USD');
-          } else if (payment.currency_paid === 'USD') {
-            weekData.genel_toplam.usd += payment.amount_paid;
-            weekData.genel_toplam.tl += TCMBExchangeService.convertCurrency(payment.amount_paid, 'USD', 'TL');
-          } else if (payment.currency_paid === 'EUR') {
-            const usdAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'USD');
-            const tlAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'TL');
-            weekData.genel_toplam.usd += usdAmount;
-            weekData.genel_toplam.tl += tlAmount;
-          }
+          // Use same STANDARD logic for totals
+          weekData.genel_toplam.usd += amount_usd;
+          weekData.genel_toplam.tl += payment.amount_paid;
           weekData.genel_toplam.original_currencies.push(payment.currency_paid);
         }
       });
@@ -292,12 +303,23 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
 // Helper functions (these would be the same as in the original file)
 function getDayMapForWeek(startDate: Date, endDate: Date) {
   const days = ['Pazar', 'Pazartesi', 'Salı', 'Çarşamba', 'Perşembe', 'Cuma', 'Cumartesi'];
+  const dayKeyMap: Record<string, string> = {
+    'Pazar': 'pazar',
+    'Pazartesi': 'pazartesi', 
+    'Salı': 'sali',
+    'Çarşamba': 'carsamba',
+    'Perşembe': 'persembe',
+    'Cuma': 'cuma',
+    'Cumartesi': 'cumartesi'
+  };
+  
   const map: any = {};
   
   for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
     const dayIndex = d.getDay();
-    const dayName = days[dayIndex].toLowerCase();
-    map[dayName] = format(d, 'dd.MM.yyyy', { locale: tr });
+    const dayDisplayName = days[dayIndex];
+    const dayKey = dayKeyMap[dayDisplayName];
+    map[dayKey] = format(d, 'dd.MM.yyyy', { locale: tr });
   }
   
   return map;
@@ -406,21 +428,13 @@ async function getCheckPayments(db: any, startDate: string, endDate: string) {
       if (weekData[dayName as keyof typeof weekData] && dayName !== 'sira_no' && dayName !== 'musteri_adi' && dayName !== 'proje' && dayName !== 'genel_toplam') {
         const dayData = (weekData as any)[dayName];
 
-        // Convert amounts based on currency using TCMB rates
-        if (payment.currency_paid === 'TRY' || payment.currency_paid === 'TL') {
-          dayData.tl = payment.amount_paid;
-          // Convert TL to USD using TCMB selling rate
-          dayData.usd = TCMBExchangeService.convertCurrency(payment.amount_paid, 'TL', 'USD');
-        } else if (payment.currency_paid === 'USD') {
+        // Use EXACT same logic as payments API: CASE WHEN currency_paid = 'USD' THEN amount_paid ELSE amount_paid * exchange_rate END
+        if (payment.currency_paid === 'USD') {
           dayData.usd = payment.amount_paid;
-          // Convert USD to TL using TCMB selling rate
-          dayData.tl = TCMBExchangeService.convertCurrency(payment.amount_paid, 'USD', 'TL');
-        } else if (payment.currency_paid === 'EUR') {
-          // Convert EUR to both USD and TL using TCMB rates
-          const usdAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'USD');
-          const tlAmount = TCMBExchangeService.convertCurrency(payment.amount_paid, 'EUR', 'TL');
-          dayData.usd = usdAmount;
-          dayData.tl = tlAmount;
+          dayData.tl = payment.amount_paid / (payment.exchange_rate || 1); // Convert USD to TL
+        } else {
+          dayData.tl = payment.amount_paid;
+          dayData.usd = payment.amount_paid * (payment.exchange_rate || 1); // Same as payments API
         }
 
         dayData.original_currency = payment.currency_paid;
@@ -483,9 +497,7 @@ async function calculatePaymentMethodSummary(db: any, startDate: Date, endDate: 
       SUM(CASE WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid ELSE 0 END) as total_tl,
       SUM(CASE 
         WHEN currency_paid = 'USD' THEN amount_paid 
-        WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid / 34.1
-        WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-        ELSE 0 
+        ELSE amount_paid * exchange_rate 
       END) as total_usd,
       COUNT(*) as payment_count
     FROM payments 
@@ -510,18 +522,19 @@ async function calculatePaymentMethodSummary(db: any, startDate: Date, endDate: 
     'Genel Toplam': { tl: 0, usd: 0 }
   };
 
-  // Map results to Turkish labels
+  // Map results to Turkish labels using database exchange rates (same as payments API)
   results.forEach((row: any) => {
     const tl = row.total_tl || 0;
     const usd = row.total_usd || 0;
+    const method = row.method || 'Cash';
     
-    if (row.method === 'Bank Transfer') {
+    if (method === 'Bank Transfer') {
       summary['Banka Havalesi'].tl += tl;
       summary['Banka Havalesi'].usd += usd;
-    } else if (row.method === 'Cash') {
+    } else if (method === 'Cash') {
       summary['Nakit'].tl += tl;
       summary['Nakit'].usd += usd;
-    } else if (row.method === 'Check') {
+    } else if (method === 'Check') {
       summary['Çek'].tl += tl;
       summary['Çek'].usd += usd;
     } else {
@@ -541,12 +554,8 @@ async function calculatePeriodicSummary(db: any, startDate: Date, endDate: Date)
   // Get current week totals with improved date handling
   const weekQuery = `
     SELECT 
-      SUM(CASE 
-        WHEN currency_paid = 'USD' THEN amount_paid 
-        WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid / 34.1
-        WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-        ELSE 0 
-      END) as total_usd
+      currency_paid,
+      amount_paid
     FROM payments 
     WHERE date(
       substr(payment_date, 7, 4) || '-' || 
@@ -555,15 +564,23 @@ async function calculatePeriodicSummary(db: any, startDate: Date, endDate: Date)
     ) BETWEEN date(?) AND date(?)
   `;
 
+  const weekResults = await db.all(weekQuery, [
+    format(startDate, 'yyyy-MM-dd'),
+    format(endDate, 'yyyy-MM-dd')
+  ]);
+
+  let weekTotalUsd = 0;
+  for (const row of weekResults) {
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    weekTotalUsd += await convertToUSD(amount, currency);
+  }
+
   // Get monthly totals by MKM/MSM categorization based on account names
   const monthlyMKMQuery = `
     SELECT 
-      SUM(CASE 
-        WHEN currency_paid = 'USD' THEN amount_paid 
-        WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid / 34.1
-        WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-        ELSE 0 
-      END) as total_usd
+      currency_paid,
+      amount_paid
     FROM payments 
     WHERE substr(payment_date, 4, 2) = ? AND substr(payment_date, 7, 4) = ?
     AND (account_name LIKE '%KUYUM%' OR account_name IS NULL)
@@ -571,12 +588,8 @@ async function calculatePeriodicSummary(db: any, startDate: Date, endDate: Date)
 
   const monthlyMSMQuery = `
     SELECT 
-      SUM(CASE 
-        WHEN currency_paid = 'USD' THEN amount_paid 
-        WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid / 34.1
-        WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-        ELSE 0 
-      END) as total_usd
+      currency_paid,
+      amount_paid
     FROM payments 
     WHERE substr(payment_date, 4, 2) = ? AND substr(payment_date, 7, 4) = ?
     AND account_name LIKE '%KAPAKLI%'
@@ -592,19 +605,31 @@ async function calculatePeriodicSummary(db: any, startDate: Date, endDate: Date)
   const currentMonth = '09'; // September where the payment data exists
   const currentYear = '2025';
   
-  const monthlyMKMResult = await db.get(monthlyMKMQuery, [currentMonth, currentYear]);
-  const monthlyMSMResult = await db.get(monthlyMSMQuery, [currentMonth, currentYear]);
+  const monthlyMKMResults = await db.all(monthlyMKMQuery, [currentMonth, currentYear]);
+  const monthlyMSMResults = await db.all(monthlyMSMQuery, [currentMonth, currentYear]);
 
-  const weekTotal = weekResult?.total_usd || 0;
-  const monthlyMKM = monthlyMKMResult?.total_usd || 0;
-  const monthlyMSM = monthlyMSMResult?.total_usd || 0;
+  // Calculate USD totals with TCMB conversion
+  let monthlyMKM = 0;
+  for (const row of monthlyMKMResults) {
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    monthlyMKM += await convertToUSD(amount, currency);
+  }
+
+  let monthlyMSM = 0;
+  for (const row of monthlyMSMResults) {
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    monthlyMSM += await convertToUSD(amount, currency);
+  }
+
   const monthTotal = monthlyMKM + monthlyMSM;
 
   return {
     weekly: {
-      'HAFTALIK MKM': weekTotal * 0.6, // 60% MKM for weekly (estimated)
-      'HAFTALIK MSM': weekTotal * 0.4, // 40% MSM for weekly (estimated)
-      'TOPLAM': weekTotal
+      'HAFTALIK MKM': weekTotalUsd * 0.6, // 60% MKM for weekly (estimated)
+      'HAFTALIK MSM': weekTotalUsd * 0.4, // 40% MSM for weekly (estimated)
+      'TOPLAM': weekTotalUsd
     },
     monthly: {
       'MKM AYLIK TOPLAM': monthlyMKM,
@@ -619,15 +644,10 @@ async function calculateCollectionDetails(db: any, startDate: Date, endDate: Dat
   const query = `
     SELECT 
       COALESCE(account_name, 'Diğer') as account_type,
-      SUM(CASE 
-        WHEN currency_paid = 'USD' THEN amount_paid 
-        WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid / 34.1
-        WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-        ELSE 0 
-      END) as total_usd
+      currency_paid,
+      amount_paid
     FROM payments 
     WHERE substr(payment_date, 4, 2) = ? AND substr(payment_date, 7, 4) = ?
-    GROUP BY COALESCE(account_name, 'Diğer')
   `;
   
   // Debug: Check what date we're actually using
@@ -644,24 +664,48 @@ async function calculateCollectionDetails(db: any, startDate: Date, endDate: Dat
   
   console.log('Collection details query results:', results);
 
+  // Group results by account type and calculate USD conversions
+  const accountTotals = new Map();
+  for (const row of results) {
+    const accountType = row.account_type || 'Diğer';
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    
+    if (!accountTotals.has(accountType)) {
+      accountTotals.set(accountType, 0);
+    }
+    
+    const currentTotal = accountTotals.get(accountType);
+    accountTotals.set(accountType, currentTotal + await convertToUSD(amount, currency));
+  }
+
   // Also check for payments with payment_method = 'Check' to include in ÇEK category
   const checkPaymentsQuery = `
     SELECT 
-      SUM(CASE 
-        WHEN currency_paid = 'USD' THEN amount_paid 
-        WHEN currency_paid = 'TRY' OR currency_paid = 'TL' THEN amount_paid / 34.1
-        WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-        ELSE 0 
-      END) as total_usd,
+      currency_paid,
+      amount_paid,
       COALESCE(account_name, 'Diğer') as account_type
     FROM payments 
     WHERE substr(payment_date, 4, 2) = ? AND substr(payment_date, 7, 4) = ?
     AND payment_method = 'Check'
-    GROUP BY COALESCE(account_name, 'Diğer')
   `;
   
   const checkResults = await db.all(checkPaymentsQuery, [currentMonth, currentYear]);
   console.log('Check payments query results:', checkResults);
+
+  // Add check payments to account totals
+  for (const row of checkResults) {
+    const accountType = row.account_type || 'Diğer';
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    
+    if (!accountTotals.has(accountType)) {
+      accountTotals.set(accountType, 0);
+    }
+    
+    const currentTotal = accountTotals.get(accountType);
+    accountTotals.set(accountType, currentTotal + await convertToUSD(amount, currency));
+  }
 
   // Map to the expected format
   const details = {
@@ -674,9 +718,10 @@ async function calculateCollectionDetails(db: any, startDate: Date, endDate: Dat
     'GENEL TOPLAM': { mkm: 0, msm: 0 }
   };
 
-  results.forEach((row: any) => {
-    const account = row.account_type || '';
-    const amount = row.total_usd || 0;
+  // Process the accountTotals Map instead of the raw results
+  accountTotals.forEach((totalUsdAmount, accountType) => {
+    const account = accountType || '';
+    const amount = totalUsdAmount || 0;
     
     console.log('Processing account:', account, 'amount:', amount);
     
@@ -731,27 +776,47 @@ async function calculateCollectionDetails(db: any, startDate: Date, endDate: Dat
   });
 
   // Process check payments separately to add to ÇEK category
-  checkResults.forEach((row: any) => {
+  // Note: Check payments were already processed and included in accountTotals above
+  // So we need to specifically handle them for the ÇEK category
+  let checkTotalUsd = 0;
+  for (const row of checkResults) {
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    checkTotalUsd += await convertToUSD(amount, currency);
+  }
+  
+  // Distribute check total between MKM and MSM based on account names
+  let checkMKM = 0;
+  let checkMSM = 0;
+  
+  for (const row of checkResults) {
     const account = row.account_type || '';
-    const amount = row.total_usd || 0;
+    const currency = row.currency_paid || 'TL';
+    const amount = row.amount_paid || 0;
+    const usdAmount = await convertToUSD(amount, currency);
     
-    console.log('Processing check payment account:', account, 'amount:', amount);
+    console.log('Processing check payment account:', account, 'amount:', usdAmount);
     
     // Determine if MKM or MSM based on account name
     const isMKM = account.toLowerCase().includes('kuyum');
     const isMSM = account.toLowerCase().includes('kapakli');
     
     // Default to MKM if neither keyword is found
-    const mkmAmount = isMKM || (!isMSM && !isMKM) ? amount : 0;
-    const msmAmount = isMSM ? amount : 0;
+    const mkmAmount = isMKM || (!isMSM && !isMKM) ? usdAmount : 0;
+    const msmAmount = isMSM ? usdAmount : 0;
     
-    details['ÇEK'].mkm += mkmAmount;
-    details['ÇEK'].msm += msmAmount;
-    details['TOPLAM'].mkm += mkmAmount;
-    details['TOPLAM'].msm += msmAmount;
-    details['GENEL TOPLAM'].mkm += mkmAmount;
-    details['GENEL TOPLAM'].msm += msmAmount;
-  });
+    checkMKM += mkmAmount;
+    checkMSM += msmAmount;
+  }
+  
+  details['ÇEK'].mkm = checkMKM;
+  details['ÇEK'].msm = checkMSM;
+
+  // Calculate final totals
+  details['TOPLAM'].mkm = details['CARŞI'].mkm + details['KUYUMCUKENT'].mkm + details['OFİS'].mkm + details['BANKA HAVALESİ'].mkm + details['ÇEK'].mkm;
+  details['TOPLAM'].msm = details['CARŞI'].msm + details['KUYUMCUKENT'].msm + details['OFİS'].msm + details['BANKA HAVALESİ'].msm + details['ÇEK'].msm;
+  details['GENEL TOPLAM'].mkm = details['TOPLAM'].mkm;
+  details['GENEL TOPLAM'].msm = details['TOPLAM'].msm;
 
   console.log('Final collection details:', details);
   
@@ -782,18 +847,11 @@ async function calculateMonthlyDailyTotals(db: any, referenceDate: Date) {
     const sql = `
       SELECT 
         payment_date,
-        SUM(
-          CASE 
-            WHEN currency_paid = 'USD' THEN amount_paid
-            WHEN currency_paid = 'TL' OR currency_paid = 'TRY' THEN amount_paid / 34.0
-            WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-            ELSE amount_paid
-          END
-        ) as daily_total_usd
+        currency_paid,
+        amount_paid
       FROM payments 
       WHERE substr(payment_date, 4, 2) = ? 
         AND substr(payment_date, 7, 4) = ?
-      GROUP BY payment_date
       ORDER BY payment_date
     `;
     
@@ -801,10 +859,27 @@ async function calculateMonthlyDailyTotals(db: any, referenceDate: Date) {
     const results = await db.all(sql, [currentMonth, currentYear]);
     console.log('Daily totals query results:', results);
     
-    // Process regular payment results
-    results.forEach((row: any) => {
+    // Process regular payment results and group by date
+    const dailyPayments = new Map();
+    for (const row of results) {
       const paymentDate = row.payment_date;
-      const totalUsd = row.daily_total_usd || 0;
+      const currency = row.currency_paid || 'TL';
+      const amount = row.amount_paid || 0;
+      
+      if (!dailyPayments.has(paymentDate)) {
+        dailyPayments.set(paymentDate, []);
+      }
+      dailyPayments.get(paymentDate).push({ currency, amount });
+    }
+    
+    // Convert currencies for each date
+    const dateKeys = Array.from(dailyPayments.keys());
+    for (const paymentDate of dateKeys) {
+      const payments = dailyPayments.get(paymentDate);
+      let totalUsd = 0;
+      for (const payment of payments) {
+        totalUsd += await convertToUSD(payment.amount, payment.currency);
+      }
       
       console.log(`Processing daily total: ${paymentDate} = $${totalUsd}`);
       
@@ -814,7 +889,7 @@ async function calculateMonthlyDailyTotals(db: any, referenceDate: Date) {
       const key = `${day}-${currentMonth}-${currentYear}`;
       
       dailyTotals[key] = totalUsd;
-    });
+    }
     
     // Query for check payments in the month
     const checkSql = `
@@ -834,10 +909,10 @@ async function calculateMonthlyDailyTotals(db: any, referenceDate: Date) {
     console.log('Check daily totals query results:', checkResults);
     
     // Add check payment totals (convert TL to USD)
-    checkResults.forEach((row: any) => {
+    for (const row of checkResults) {
       const paymentDate = row.payment_date;
       const totalTl = row.daily_check_total_tl || 0;
-      const totalUsd = totalTl / 34.0; // Convert TL to USD
+      const totalUsd = await convertToUSD(totalTl, 'TL'); // Convert TL to USD using TCMB
       
       console.log(`Processing check daily total: ${paymentDate} = ₺${totalTl} = $${totalUsd}`);
       
@@ -848,7 +923,7 @@ async function calculateMonthlyDailyTotals(db: any, referenceDate: Date) {
       
       // Add to existing total
       dailyTotals[key] = (dailyTotals[key] || 0) + totalUsd;
-    });
+    }
     
     console.log('Final daily totals:', dailyTotals);
     

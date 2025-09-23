@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /
+
+# This is a private application
+# No search engine indexing allowed

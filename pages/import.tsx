@@ -25,6 +25,7 @@ import NextLink from 'next/link';
 import { useDropzone } from 'react-dropzone';
 import { FiUpload, FiCheck, FiX, FiAlertCircle, FiFileText } from 'react-icons/fi';
 import axios from 'axios';
+import { useNotifications } from '../contexts/NotificationContext';
 
 const ImportPage = () => {
   const [file, setFile] = useState<File | null>(null);
@@ -37,6 +38,7 @@ const ImportPage = () => {
     errors?: string[];
   } | null>(null);
   const toast = useToast();
+  const { addNotification } = useNotifications();
 
   // File drop handler
   const onDrop = useCallback((acceptedFiles: File[]) => {
@@ -112,7 +114,7 @@ const ImportPage = () => {
       
       setUploadResult(response.data);
       
-      // Show success or error toast
+      // Show success or error toast and add to notifications
       if (response.data.success) {
         toast({
           title: 'Import successful',
@@ -121,6 +123,14 @@ const ImportPage = () => {
           duration: 5000,
           isClosable: true,
         });
+        
+        // Add persistent notification
+        addNotification({
+          title: 'Data Import Completed',
+          message: `Successfully imported ${response.data.inserted} payment records from ${file?.name}`,
+          type: 'success',
+          autoDelete: false
+        });
       } else {
         toast({
           title: 'Import completed with errors',
@@ -128,6 +138,14 @@ const ImportPage = () => {
           status: 'warning',
           duration: 5000,
           isClosable: true,
+        });
+        
+        // Add persistent notification with error details
+        addNotification({
+          title: 'Import Completed with Issues',
+          message: `${response.data.message}. ${response.data.errors?.length || 0} errors found in ${file?.name}`,
+          type: 'warning',
+          autoDelete: false
         });
       }
     } catch (error) {
@@ -145,6 +163,14 @@ const ImportPage = () => {
         duration: 5000,
         isClosable: true,
       });
+      
+      // Add error notification
+      addNotification({
+        title: 'File Upload Failed',
+        message: `Failed to upload ${file?.name}. Server error occurred during file upload.`,
+        type: 'error',
+        autoDelete: false
+      });
     } finally {
       setIsUploading(false);
     }
@@ -161,12 +187,10 @@ const ImportPage = () => {
     <Box>
       <Flex justify="space-between" align="center" mb={6}>
         <Heading size="lg">Import Payment Data</Heading>
-        <NextLink href="/import-new" passHref>
-          <Link colorScheme="brand" as="span">
-            <Button colorScheme="brand" size="sm" as="span">
-              Try New Import with Duplicate Detection
-            </Button>
-          </Link>
+        <NextLink href="/import-new">
+          <Button colorScheme="brand" size="sm">
+            Try New Import with Duplicate Detection
+          </Button>
         </NextLink>
       </Flex>
       
@@ -337,10 +361,8 @@ const ImportPage = () => {
               </Button>
               
               {uploadResult.success && (
-                <NextLink href="/payments" passHref>
-                  <Link>
-                    <Button colorScheme="brand">View Imported Data</Button>
-                  </Link>
+                <NextLink href="/payments">
+                  <Button colorScheme="brand">View Imported Data</Button>
                 </NextLink>
               )}
             </Flex>

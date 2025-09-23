@@ -4,23 +4,30 @@
     {
       "src": "package.json",
       "use": "@vercel/next"
-    },
-    {
-      "src": "api/**/*.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/api/(.*)",
-      "dest": "api/$1.py"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/$1"
     }
   ],
   "env": {
-    "PYTHONPATH": "."
+    "AUTH_USERNAME": "innogy",
+    "AUTH_PASSWORD": "tahsilat2025"
+  },
+  "headers": [
+    {
+      "source": "/(.*)",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex, nofollow, noarchive, nosnippet"
+        },
+        {
+          "key": "Cache-Control",
+          "value": "no-cache, no-store, must-revalidate"
+        }
+      ]
+    }
+  ],
+  "functions": {
+    "pages/api/**/*.ts": {
+      "maxDuration": 30
+    }
   }
 }

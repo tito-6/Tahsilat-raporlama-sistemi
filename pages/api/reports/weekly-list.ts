@@ -245,12 +245,17 @@ function getWeekNumber(date: Date): number {
 
 // Helper function to format week range (DD.MM-DD.MM.YYYY)
 function formatWeekRange(startDate: Date, endDate: Date): string {
-  const startDay = startDate.getDate().toString().padStart(2, '0');
-  const startMonth = (startDate.getMonth() + 1).toString().padStart(2, '0');
+  // Ensure we're working with Date objects
+  const start = new Date(startDate);
+  const end = new Date(endDate);
   
-  const endDay = endDate.getDate().toString().padStart(2, '0');
-  const endMonth = (endDate.getMonth() + 1).toString().padStart(2, '0');
-  const endYear = endDate.getFullYear();
+  // Use UTC to avoid timezone issues
+  const startDay = start.getUTCDate().toString().padStart(2, '0');
+  const startMonth = (start.getUTCMonth() + 1).toString().padStart(2, '0');
+  
+  const endDay = end.getUTCDate().toString().padStart(2, '0');
+  const endMonth = (end.getUTCMonth() + 1).toString().padStart(2, '0');
+  const endYear = end.getUTCFullYear();
   
   return `${startDay}.${startMonth}-${endDay}.${endMonth}.${endYear}`;
 }

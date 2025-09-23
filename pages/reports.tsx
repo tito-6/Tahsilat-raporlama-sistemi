@@ -1,14 +1,12 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import {
   Box,
-  Button,
   Card,
   CardBody,
   CardHeader,
   Flex,
   HStack,
   VStack,
-  FormLabel,
   Heading,
   Text,
   Stack,
@@ -26,18 +24,14 @@ import {
   MenuButton,
   MenuList,
   MenuItem,
-  useToast,
-  Select,
-  Divider,
-  Tabs,
-  TabList,
-  TabPanels,
-  Tab,
-  TabPanel,
+  Button,
+  Icon,
 } from '@chakra-ui/react';
 import { ChevronDownIcon, DownloadIcon } from '@chakra-ui/icons';
-import { FiRefreshCw, FiCalendar } from 'react-icons/fi';
+import { useNotifications } from '../contexts/NotificationContext';
+import { FaPrint } from 'react-icons/fa';
 import axios from 'axios';
+import Layout from '../components/Layout';
 
 // Define TypeScript interfaces for our report data
 interface WeeklyReport {
@@ -45,73 +39,74 @@ interface WeeklyReport {
   week_start: string;
   week_end: string;
   year: number;
-  month: number; // 1-12 format representing Jan-Dec
+  month: number;
   formatted_date: string;
   has_data: boolean;
 }
 
-// Array of month names for dropdown (0-indexed for JavaScript Date API)
+// Array of month names for dropdown
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December"
 ];
-
-// Debug mapping of month names to values
-console.log('Month mapping for debugging:', 
-  MONTHS.map((name, index) => ({ 
-    name, 
-    jsIndex: index,  // JavaScript month (0-11)
-    displayValue: index + 1  // Display value (1-12) 
-  }))
-);
 
 const ReportsPage = () => {
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isLoadingReportList, setIsLoadingReportList] = useState<boolean>(true);
   const [reportData, setReportData] = useState<any | null>(null);
   const [weeklyReports, setWeeklyReports] = useState<WeeklyReport[]>([]);
-  // Store report data for all weeks
   const [allWeekReports, setAllWeekReports] = useState<{[key: number]: any}>({});
-  // Initialize to 2025 and September (month 9) where our data is located
   const [selectedYear, setSelectedYear] = useState<number>(2025);
   const [selectedMonth, setSelectedMonth] = useState<number>(9);
   const [selectedWeek, setSelectedWeek] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const toast = useToast();
+  const [isExporting, setIsExporting] = useState<{[key: string]: boolean}>({});
+  const { addNotification } = useNotifications();
+
+  // Helper function to format currency properly for print (same as web interface)
+  const formatCurrencyForPrint = (value: number): string => {
+    if (!value || isNaN(value)) return '0';
+    return value.toLocaleString('en-US', { 
+      minimumFractionDigits: 0, 
+      maximumFractionDigits: 0 
+    });
+  };
+
+  // Helper function to translate payment methods to Turkish
+  const translatePaymentMethod = (method: string): string => {
+    const translations: Record<string, string> = {
+      'Bank Transfer': 'Banka Havalesi',
+      'Cash': 'Nakit', 
+      'Check': 'Çek',
+      'Credit Card': 'Kredi Kartı'
+    };
+    return translations[method] || method;
+  };
 
   // Consolidated fetch and load function
   const fetchAndLoadAllReports = async (forceRegenerate = false) => {
-    console.log('FRONTEND: fetchAndLoadAllReports called with forceRegenerate:', forceRegenerate);
-    
     try {
       setIsLoadingReportList(true);
       setError(null);
       
       if (forceRegenerate) {
-        toast({
+        addNotification({
           title: "Regenerating Reports",
-          description: "Requesting the latest data from the server...",
-          status: "info",
-          duration: 3000,
-          isClosable: true,
+          message: "Requesting the latest data from the server...",
+          type: "info",
+          deleteAfter: 3000
         });
       }
       
-      // Step 1: Fetch the weekly reports list
       const response = await axios.get(`/api/reports/weekly-list${forceRegenerate ? '?force=true' : ''}`, {
         timeout: 15000
       });
       
-      console.log('FRONTEND: Weekly list API response:', response.data);
-      
       if (response.data.success && response.data.data?.weekly_reports) {
         const rawReports = response.data.data.weekly_reports;
-        
         const sortedReports = [...rawReports].sort((a, b) => {
           return new Date(b.week_start).getTime() - new Date(a.week_start).getTime();
         });
-        
-        console.log('FRONTEND: Sorted reports:', sortedReports);
         
         if (sortedReports.length === 0) {
           setError('No weekly reports were generated. Import some payment data first.');
@@ -121,17 +116,12 @@ const ReportsPage = () => {
         
         setWeeklyReports(sortedReports);
         
-        // Step 2: Load all week reports for the current month/year selection
         const currentMonthWeeks = sortedReports.filter(
           report => report.year === selectedYear && report.month === selectedMonth
         );
         
-        console.log('FRONTEND: Current month weeks:', currentMonthWeeks);
-        
         if (currentMonthWeeks.length > 0) {
           await loadReportsForWeeks(currentMonthWeeks);
-          
-          // Auto-select the first week if none is selected
           if (!selectedWeek) {
             setSelectedWeek(currentMonthWeeks[0].week_number);
           }
@@ -148,7 +138,6 @@ const ReportsPage = () => {
     }
   };
 
-  // Error handling function
   const handleError = (err: any) => {
     const currentDate = new Date();
     setWeeklyReports([{
@@ -172,116 +161,11 @@ const ReportsPage = () => {
     }
   };
 
-  // Simplified fetchWeeklyReportsList function
-  const fetchWeeklyReportsList = async (forceRegenerate = false) => {
-    // This function is now handled by fetchAndLoadAllReports
-    await fetchAndLoadAllReports(forceRegenerate);
-  };
-
-  // Single useEffect to handle initial load
-  useEffect(() => {
-    console.log('FRONTEND: Initial useEffect triggered');
-    fetchAndLoadAllReports();
-  }, []); // Only run on mount
-
-  // Handle year/month changes - reload reports for new selection
-  useEffect(() => {
-    if (weeklyReports.length > 0) {
-      console.log('FRONTEND: Year/month changed, reloading reports for new selection');
-      
-      const newMonthWeeks = weeklyReports.filter(
-        report => report.year === selectedYear && report.month === selectedMonth
-      );
-      
-      if (newMonthWeeks.length > 0) {
-        setSelectedWeek(null); // Reset selection
-        loadReportsForWeeks(newMonthWeeks);
-      } else {
-        setAllWeekReports({});
-        setSelectedWeek(null);
-      }
-    }
-  }, [selectedYear, selectedMonth, weeklyReports]);
-
-  // Handler for generating turkish weekly report
-  const generateTurkishWeeklyReport = async (weekNumber: number) => {
-    const selectedWeekData = weeklyReports.find(
-      report => report.week_number === weekNumber && 
-                report.year === selectedYear && 
-                report.month === selectedMonth
-    );
-    
-    if (!selectedWeekData) {
-      setError('Cannot find selected week data');
-      return;
-    }
-    
-    const startDate = selectedWeekData.week_start;
-    const endDate = selectedWeekData.week_end;
-    
-    try {
-      setIsLoading(true);
-      setError(null);
-      
-      const response = await axios.get('/api/reports/turkish-weekly', {
-        params: {
-          start_date: startDate,
-          end_date: endDate
-        },
-        timeout: 15000
-      });
-      
-      if (response.data && response.data.success) {
-        setReportData(response.data);
-        
-        toast({
-          title: "Report Generated",
-          description: "Weekly collections report has been generated successfully.",
-          status: "success",
-          duration: 5000,
-          isClosable: true,
-        });
-      } else {
-        throw new Error('Invalid response format from server');
-      }
-    } catch (err) {
-      console.error('Error generating weekly report:', err);
-      setError('Failed to generate weekly report. The server may be restarting or unavailable.');
-      
-      setReportData({
-        success: false,
-        data: {
-          report_title: 'Report Unavailable',
-          date_range: `${startDate} - ${endDate}`,
-          payment_method: 'All',
-          weekly_report: [],
-          week_totals: null
-        }
-      });
-      
-      toast({
-        title: "Error",
-        description: "Failed to generate the report. Please try again later.",
-        status: "error",
-        duration: 5000,
-        isClosable: true,
-      });
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  // Simplified load reports function - no longer checks has_data flag
   const loadReportsForWeeks = async (weeks: WeeklyReport[]) => {
-    console.log('FRONTEND: loadReportsForWeeks called with:', weeks.map(w => w.week_number));
-    
     const newAllWeekReports: {[key: number]: any} = {};
     
-    // Process weeks in parallel for better performance
     const reportPromises = weeks.map(async (week) => {
       try {
-        console.log(`FRONTEND: Loading report for week ${week.week_number} (${week.week_start} to ${week.week_end})`);
-        
         const response = await axios.get('/api/reports/turkish-weekly', {
           params: {
             start_date: week.week_start,
@@ -290,15 +174,13 @@ const ReportsPage = () => {
           timeout: 15000
         });
         
-        console.log(`FRONTEND: Week ${week.week_number} response:`, response.data);
-        
         return {
           weekNumber: week.week_number,
           data: response.data
         };
         
       } catch (err) {
-        console.error(`FRONTEND: Error loading week ${week.week_number}:`, err);
+        console.error(`Error loading week ${week.week_number}:`, err);
         return {
           weekNumber: week.week_number,
           data: {
@@ -313,23 +195,37 @@ const ReportsPage = () => {
       }
     });
     
-    // Wait for all reports to load
     const results = await Promise.all(reportPromises);
-    
-    // Populate the reports object
     results.forEach(result => {
       newAllWeekReports[result.weekNumber] = result.data;
     });
     
-    console.log('FRONTEND: Setting allWeekReports to:', newAllWeekReports);
     setAllWeekReports(newAllWeekReports);
     
-    // Auto-select the first week if none is selected
     if (!selectedWeek && weeks.length > 0) {
-      console.log(`FRONTEND: Auto-selecting week ${weeks[0].week_number}`);
       setSelectedWeek(weeks[0].week_number);
     }
   };
+
+  useEffect(() => {
+    fetchAndLoadAllReports();
+  }, []);
+
+  useEffect(() => {
+    if (weeklyReports.length > 0) {
+      const newMonthWeeks = weeklyReports.filter(
+        report => report.year === selectedYear && report.month === selectedMonth
+      );
+      
+      if (newMonthWeeks.length > 0) {
+        setSelectedWeek(null);
+        loadReportsForWeeks(newMonthWeeks);
+      } else {
+        setAllWeekReports({});
+        setSelectedWeek(null);
+      }
+    }
+  }, [selectedYear, selectedMonth, weeklyReports]);
 
   // Handle year selection change
   const handleYearChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -341,27 +237,24 @@ const ReportsPage = () => {
   // Handle month selection change
   const handleMonthChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const selectedMonthValue = parseInt(e.target.value);
-    console.log(`Month changed:`, {
-      selectedValue: e.target.value,
-      parsedValue: selectedMonthValue,
-      monthName: MONTHS[selectedMonthValue - 1]
-    });
-    
     setSelectedMonth(selectedMonthValue);
     setSelectedWeek(null);
     setReportData(null);
-    
-    // Log available weeks for the newly selected month
-    const weeksForNewMonth = weeklyReports.filter(
-      report => report.year === selectedYear && report.month === selectedMonthValue
-    );
-    
-    console.log('Available weeks for newly selected month:', {
-      year: selectedYear,
-      month: selectedMonthValue,
-      monthName: MONTHS[selectedMonthValue - 1],
-      availableWeeks: weeksForNewMonth.map(w => w.week_number),
-      weekCount: weeksForNewMonth.length
+  };
+
+  // Handle week selection
+  const handleWeekSelect = (weekNumber: number) => {
+    setSelectedWeek(weekNumber);
+  };
+
+  // Handle refresh
+  const handleRefreshReports = async () => {
+    await fetchAndLoadAllReports(true);
+    addNotification({
+      title: "Reports Updated",
+      message: "Weekly reports have been regenerated.",
+      type: "success",
+      deleteAfter: 5000
     });
   };
 
@@ -374,12 +267,10 @@ const ReportsPage = () => {
 
   // Get available months for the selected year
   const availableMonths = useMemo(() => {
-    // Get all distinct months from weekly reports for the selected year
     const monthsWithData = weeklyReports
       .filter(report => report.year === selectedYear)
       .map(report => report.month);
       
-    // Filter to distinct values using a more compatible approach
     const months: number[] = [];
     monthsWithData.forEach(month => {
       if (month !== undefined && !months.includes(month)) {
@@ -387,74 +278,17 @@ const ReportsPage = () => {
       }
     });
     
-    // Sort months numerically (January=1, February=2, etc.)
-    const sortedMonths = months.sort((a, b) => (a || 0) - (b || 0));
-    
-    console.log('Available months for year:', {
-      year: selectedYear,
-      foundMonths: monthsWithData,
-      distinctMonths: months,
-      sortedMonths: sortedMonths,
-      monthNames: sortedMonths.map(m => m !== null && m !== undefined ? MONTHS[m-1] : 'Unknown')
-    });
-    
-    return sortedMonths;
+    return months.sort((a, b) => (a || 0) - (b || 0));
   }, [weeklyReports, selectedYear]);
 
   // Get weeks for the selected year and month
   const weeksInSelectedMonth = useMemo(() => {
-    console.log('Filtering weeks:', { 
-      selectedYear, 
-      selectedMonth, 
-      availableWeeks: weeklyReports.map(r => ({ 
-        week: r.week_number, 
-        year: r.year, 
-        month: r.month, 
-        startDate: r.week_start
-      }))
-    });
-    
     const filteredWeeks = weeklyReports.filter(
       report => report.year === selectedYear && report.month === selectedMonth
     ).sort((a, b) => a.week_number - b.week_number);
     
-    console.log('Filtered weeks for selected month:', { 
-      year: selectedYear, 
-      month: selectedMonth, 
-      monthName: MONTHS[selectedMonth - 1],  // Convert 1-based month to 0-based index
-      filteredWeeks: filteredWeeks.map(w => w.week_number),
-      weekCount: filteredWeeks.length
-    });
-    
     return filteredWeeks;
   }, [weeklyReports, selectedYear, selectedMonth]);
-
-  // Auto-load all week reports when weeks in selected month changes
-  useEffect(() => {
-    if (weeksInSelectedMonth.length > 0) {
-      console.log('FRONTEND: Auto-loading week reports for:', weeksInSelectedMonth.map(w => w.week_number));
-      console.log('FRONTEND: Weeks data:', weeksInSelectedMonth);
-      loadReportsForWeeks(weeksInSelectedMonth);
-    } else {
-      console.log('FRONTEND: No weeks to auto-load, weeksInSelectedMonth is empty');
-    }
-  }, [weeksInSelectedMonth]);
-
-  // Force regenerate all weekly reports
-  const handleRegenerateReports = async () => {
-    await fetchWeeklyReportsList(true);
-    
-    toast({
-      title: "Reports Updated",
-      description: "Weekly reports have been regenerated.",
-      status: "success",
-      duration: 5000,
-      isClosable: true,
-    });
-  };
-
-  // State for tracking export in progress
-  const [isExporting, setIsExporting] = useState<{[key: string]: boolean}>({});
 
   // Handle export action
   const handleExport = async (format: string, weekNumber: number) => {
@@ -465,12 +299,11 @@ const ReportsPage = () => {
     );
     
     if (!selectedWeekData) {
-      toast({
+      addNotification({
         title: "Export Failed",
-        description: "Cannot find selected week data to export.",
-        status: "error",
-        duration: 5000,
-        isClosable: true,
+        message: "Cannot find selected week data to export.",
+        type: "error",
+        deleteAfter: 5000
       });
       return;
     }
@@ -482,12 +315,11 @@ const ReportsPage = () => {
     setIsExporting(prev => ({ ...prev, [exportKey]: true }));
     
     try {
-      toast({
+      addNotification({
         title: "Exporting Report",
-        description: `Preparing ${format.toUpperCase()} export...`,
-        status: "info",
-        duration: 2000,
-        isClosable: true,
+        message: `Preparing ${format.toUpperCase()} export...`,
+        type: "info",
+        deleteAfter: 2000
       });
       
       if (format === 'json') {
@@ -511,12 +343,11 @@ const ReportsPage = () => {
         downloadAnchorNode.click();
         downloadAnchorNode.remove();
         
-        toast({
+        addNotification({
           title: "Export Complete",
-          description: `Report exported as ${fileName}`,
-          status: "success",
-          duration: 3000,
-          isClosable: true,
+          message: `Report exported as ${fileName}`,
+          type: "success",
+          deleteAfter: 3000
         });
         
         return;
@@ -544,12 +375,11 @@ const ReportsPage = () => {
       
       window.URL.revokeObjectURL(url);
       
-      toast({
+      addNotification({
         title: "Export Complete",
-        description: `Report exported as ${fileName}`,
-        status: "success",
-        duration: 3000,
-        isClosable: true,
+        message: `Report exported as ${fileName}`,
+        type: "success",
+        deleteAfter: 3000
       });
       
     } catch (err: any) {
@@ -565,12 +395,11 @@ const ReportsPage = () => {
         errorMessage = 'Export API endpoint not found. The server may be misconfigured.';
       }
       
-      toast({
+      addNotification({
         title: "Export Failed",
-        description: errorMessage,
-        status: "error",
-        duration: 5000,
-        isClosable: true,
+        message: errorMessage,
+        type: "error",
+        deleteAfter: 5000
       });
     } finally {
       setIsExporting(prev => {
@@ -581,68 +410,700 @@ const ReportsPage = () => {
     }
   };
 
-  // Render weekly collections report in the specified format
-  const renderWeeklyCollectionsReport = (weekReportData: any) => {
+  // Handle print action
+  const handlePrint = (weekNumber: number) => {
+    // Check if data exists for the selected week
+    if (!allWeekReports[weekNumber] || !allWeekReports[weekNumber].success) {
+      addNotification({
+        title: "Print Failed",
+        message: "Cannot find selected week data to print.",
+        type: "error",
+        deleteAfter: 3000
+      });
+      return;
+    }
+
+    // Create a new window for printing
+    const printWindow = window.open('', '_blank');
+    if (!printWindow) {
+      addNotification({
+        title: "Print Failed",
+        message: "Popup blocked. Please allow popups and try again.",
+        type: "error",
+        deleteAfter: 3000
+      });
+      return;
+    }
+
+    const data = allWeekReports[weekNumber].data;
+    
+    // Generate print-friendly HTML
+    const printContent = `
+      <!DOCTYPE html>
+      <html lang="tr">
+      <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Haftalık Tahsilat Raporu - Hafta ${weekNumber}</title>
+        <style>
+          @import url('https://fonts.googleapis.com/css2?family=Century+Gothic:wght@400;700&display=swap');
+          
+          * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+          }
+          
+          body {
+            font-family: 'Century Gothic', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 8px;
+            line-height: 1.0;
+            color: #000;
+            background: white;
+            margin: 5px;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+          }
+          
+          .header {
+            text-align: center;
+            margin-bottom: 4px;
+            border-bottom: 1px solid #000;
+            padding-bottom: 3px;
+          }
+          
+          .header h1 {
+            font-size: 12px;
+            font-weight: bold;
+            margin-bottom: 2px;
+            color: #1a365d;
+          }
+          
+          .header p {
+            font-size: 8px;
+            margin-bottom: 1px;
+            color: #2d3748;
+            display: inline-block;
+            margin-right: 10px;
+          }
+          
+          .table-container {
+            margin-bottom: 4px;
+            page-break-inside: avoid;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+          }
+          
+          .section-title {
+            font-size: 9px;
+            font-weight: bold;
+            margin-bottom: 2px;
+            padding: 2px;
+            background-color: #f7fafc;
+            border: 1px solid #e2e8f0;
+            text-align: center;
+            color: #1a365d;
+          }
+          
+          .data-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 3px;
+            font-size: 7px;
+            flex-grow: 1;
+          }
+          
+          .data-table th,
+          .data-table td {
+            border: 1px solid #000;
+            padding: 2px;
+            text-align: center;
+            vertical-align: middle;
+            line-height: 1.1;
+            height: auto;
+            min-height: 14px;
+          }
+          
+          .data-table th {
+            background-color: #e6f3ff;
+            font-weight: bold;
+            font-size: 7px;
+            padding: 1px;
+          }
+          
+          .data-table .customer-name {
+            text-align: left;
+            max-width: 100px;
+            font-size: 6px;
+          }
+          
+          .data-table .project-name {
+            text-align: left;
+            max-width: 60px;
+            font-size: 6px;
+          }
+          
+          .total-row {
+            background-color: #fff5e6 !important;
+            font-weight: bold;
+          }
+          
+          .summary-table {
+            width: 45%;
+            margin: 0 auto 4px auto;
+            border-collapse: collapse;
+            font-size: 9px;
+            float: left;
+            margin-right: 2%;
+          }
+          
+          .summary-table th,
+          .summary-table td {
+            border: 1px solid #000;
+            padding: 3px 4px;
+            text-align: center;
+            font-size: 9px;
+          }
+          
+          .summary-table th {
+            background-color: #f0f8ff;
+            font-weight: bold;
+          }
+          
+          .daily-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 7px;
+          }
+          
+          .daily-table th,
+          .daily-table td {
+            border: 1px solid #000;
+            padding: 1px;
+            text-align: center;
+          }
+          
+          .daily-table th {
+            background-color: #e6f3ff;
+            font-weight: bold;
+          }
+          
+          .footer {
+            margin-top: 4px;
+            text-align: center;
+            font-size: 6px;
+            color: #666;
+            border-top: 1px solid #ccc;
+            padding-top: 2px;
+            page-break-inside: avoid;
+            position: fixed;
+            bottom: 0;
+            width: 100%;
+            background: white;
+          }
+          
+          .summary-container {
+            overflow: hidden;
+            page-break-inside: avoid;
+            flex-shrink: 0;
+          }
+          
+          .summary-container::after {
+            content: "";
+            display: table;
+            clear: both;
+          }
+          
+          .content-wrapper {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            min-height: 100vh;
+          }
+          
+          .main-tables {
+            page-break-after: avoid;
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+          }
+          
+          @media print {
+            @page { 
+              size: A4 landscape;
+              margin: 5mm;
+            }
+            body { 
+              margin: 0; 
+              font-size: 7px;
+              line-height: 0.9;
+              padding-bottom: 15px;
+              height: 100vh;
+              display: flex;
+              flex-direction: column;
+            }
+            .header { 
+              margin-bottom: 2px;
+              padding-bottom: 2px;
+              flex-shrink: 0;
+            }
+            .header h1 { 
+              font-size: 10px;
+              margin-bottom: 1px;
+            }
+            .header p { 
+              font-size: 6px;
+              margin-bottom: 0px;
+            }
+            .section-title { 
+              font-size: 7px;
+              margin-bottom: 1px;
+              padding: 1px;
+            }
+            .main-tables {
+              flex-grow: 1;
+              display: flex;
+              flex-direction: column;
+              min-height: 0;
+            }
+            .table-container {
+              margin-bottom: 2px;
+              flex-grow: 1;
+              display: flex;
+              flex-direction: column;
+            }
+            .data-table {
+              flex-grow: 1;
+              height: 100%;
+            }
+            .data-table th,
+            .data-table td {
+              padding: 1px 2px;
+              height: auto;
+              min-height: 12px;
+            }
+            .data-table, .summary-table, .daily-table { 
+              font-size: 6px;
+            }
+            .data-table th, .data-table td {
+              padding: 1px 2px;
+              height: auto;
+              min-height: 12px;
+            }
+            .summary-table {
+              width: 48%;
+              margin-bottom: 2px;
+              flex-shrink: 0;
+              font-size: 9px;
+            }
+            .summary-table th,
+            .summary-table td {
+              padding: 3px 4px;
+              font-size: 9px;
+              line-height: 1.3;
+            }
+            .footer {
+              font-size: 4px;
+              margin-top: 2px;
+              padding-top: 1px;
+              position: fixed;
+              bottom: 0;
+              flex-shrink: 0;
+            }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="content-wrapper" style="display: flex; flex-direction: column; height: 100vh;">
+        <div class="header">
+          <h1>${data.report_title || 'MODEL KUYUM-MODEL SANAYİ MERKEZİ TAHSİLATLAR TABLOSU'}</h1>
+          <div style="text-align: center;">
+            <p><strong>Tarih:</strong> ${data.date_range || ''}</p>
+            <p><strong>Ödeme Şekli:</strong> ${data.payment_method || 'Banka Havalesi-Nakit'}</p>
+            <p><strong>Rapor Tarihi:</strong> ${new Date().toLocaleDateString('tr-TR')}</p>
+          </div>
+        </div>
+
+        ${data.weekly_report && data.weekly_report.length > 0 ? `
+        <div class="main-tables" style="flex-grow: 1; display: flex; flex-direction: column;">
+          <div class="table-container" style="flex-grow: 1; display: flex; flex-direction: column;">
+            <div class="section-title">HAFTALIK TAHSİLATLAR</div>
+            <table class="data-table" style="flex-grow: 1; height: 100%;">
+              <thead>
+                <tr>
+                  <th>SIRA</th>
+                  <th>MÜŞTERİ ADI SOYADI</th>
+                  <th>PROJE</th>
+                  <th>PZT</th>
+                  <th>SAL</th>
+                  <th>ÇAR</th>
+                  <th>PER</th>
+                  <th>CUM</th>
+                  <th>CTS</th>
+                  <th>PAZ</th>
+                  <th>TOPLAM</th>
+                </tr>
+                ${data.day_map ? `
+                <tr style="font-size: 8px; color: #666;">
+                  <td></td>
+                  <td></td>
+                  <td></td>
+                  <td>${data.day_map.pazartesi || ''}</td>
+                  <td>${data.day_map.sali || ''}</td>
+                  <td>${data.day_map.carsamba || ''}</td>
+                  <td>${data.day_map.persembe || ''}</td>
+                  <td>${data.day_map.cuma || ''}</td>
+                  <td>${data.day_map.cumartesi || ''}</td>
+                  <td>${data.day_map.pazar || ''}</td>
+                  <td></td>
+                </tr>
+                ` : ''}
+              </thead>
+              <tbody>
+                ${data.weekly_report.map((row: any) => `
+                  <tr>
+                    <td>${row.sira_no}</td>
+                    <td class="customer-name">${row.musteri_adi}</td>
+                    <td class="project-name">${row.proje}</td>
+                    <td>$${formatCurrencyForPrint(row.pazartesi?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.sali?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.carsamba?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.persembe?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.cuma?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.cumartesi?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.pazar?.usd || 0)}</td>
+                    <td><strong>$${formatCurrencyForPrint(row.genel_toplam?.usd || 0)}</strong></td>
+                  </tr>
+                `).join('')}
+                ${data.week_totals ? `
+                <tr class="total-row">
+                  <td><strong>TOPLAM</strong></td>
+                  <td></td>
+                  <td></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.pazartesi?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.sali?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.carsamba?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.persembe?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.cuma?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.cumartesi?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.pazar?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.week_totals.genel_toplam?.usd || 0)}</strong></td>
+                </tr>
+                ` : ''}
+              </tbody>
+            </table>
+          </div>
+
+          ${data.check_payments && data.check_payments.length > 0 ? `
+          <div class="table-container">
+            <div class="section-title">HAFTALIK ÇEK TAHSİLATLARI</div>
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>SIRA</th>
+                  <th>MÜŞTERİ ADI SOYADI</th>
+                  <th>PROJE</th>
+                  <th>PZT</th>
+                  <th>SAL</th>
+                  <th>ÇAR</th>
+                  <th>PER</th>
+                  <th>CUM</th>
+                  <th>CTS</th>
+                  <th>PAZ</th>
+                  <th>TOPLAM</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${data.check_payments.map((row: any) => `
+                  <tr>
+                    <td>${row.sira_no}</td>
+                    <td class="customer-name">${row.musteri_adi}</td>
+                    <td class="project-name">${row.proje}</td>
+                    <td>$${formatCurrencyForPrint(row.pazartesi?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.sali?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.carsamba?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.persembe?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.cuma?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.cumartesi?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.pazar?.usd || 0)}</td>
+                    <td>$${formatCurrencyForPrint(row.genel_toplam?.usd || 0)}</td>
+                  </tr>
+                `).join('')}
+                ${data.check_totals ? `
+                <tr class="total-row">
+                  <td><strong>TOPLAM</strong></td>
+                  <td></td>
+                  <td></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.pazartesi?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.sali?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.carsamba?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.persembe?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.cuma?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.cumartesi?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.pazar?.usd || 0)}</strong></td>
+                  <td><strong>$${formatCurrencyForPrint(data.check_totals.genel_toplam?.usd || 0)}</strong></td>
+                </tr>
+                ` : ''}
+              </tbody>
+            </table>
+          </div>
+          ` : ''}
+        </div>
+        ` : ''}
+
+        ${data.summary_tables ? `
+        <div class="table-container" style="flex-shrink: 0;">
+          <div class="section-title">ÖZET TABLOLAR</div>
+          
+          <div class="summary-container">
+            ${data.summary_tables.payment_method_summary ? `
+            <div style="float: left; width: 48%; margin-right: 2%;">
+              <h3 style="text-align: center; margin-bottom: 2px; font-size: 8px;">Ödeme Şekli Özeti</h3>
+              <table class="summary-table" style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th>Ödeme Şekli</th>
+                    <th>Toplam TL</th>
+                    <th>Toplam USD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${Object.entries(data.summary_tables.payment_method_summary).filter(([method]) => method !== 'Genel Toplam').map(([method, amounts]: [string, any]) => `
+                    <tr>
+                      <td>${method}</td>
+                      <td>${amounts.tl ? amounts.tl.toLocaleString('tr-TR') : '0'}</td>
+                      <td>$${formatCurrencyForPrint(amounts.usd || 0)}</td>
+                    </tr>
+                  `).join('')}
+                  ${data.summary_tables.payment_method_summary['Genel Toplam'] ? `
+                  <tr style="font-weight: bold; background-color: #f0f8ff;">
+                    <td><strong>Genel Toplam</strong></td>
+                    <td><strong>${data.summary_tables.payment_method_summary['Genel Toplam'].tl.toLocaleString('tr-TR')}</strong></td>
+                    <td><strong>$${formatCurrencyForPrint(data.summary_tables.payment_method_summary['Genel Toplam'].usd)}</strong></td>
+                  </tr>
+                  ` : ''}
+                </tbody>
+              </table>
+            </div>
+            ` : ''}
+
+              ${data.summary_tables.periodic_summary?.weekly ? `
+              <div style="float: left; width: 48%;">
+                <h3 style="text-align: center; margin-bottom: 2px; font-size: 8px;">Haftalık Toplam Özeti</h3>
+                <table class="summary-table" style="width: 100%;">
+                  <thead>
+                    <tr>
+                      <th>Dönem</th>
+                      <th>USD</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${Object.entries(data.summary_tables.periodic_summary.weekly).map(([period, amount]) => `
+                      <tr>
+                        <td>${period}</td>
+                        <td>$${formatCurrencyForPrint(amount as number)}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+              ` : ''}
+            </div>
+
+            ${data.summary_tables.collection_details ? `
+            <div style="clear: both; margin-top: 4px;">
+              <h3 style="text-align: center; margin-bottom: 2px; font-size: 8px;">Lokasyon bazlı Tahsilat Detayları</h3>
+              <table class="summary-table" style="width: 100%; margin: 0 auto;">
+                <thead>
+                  <tr>
+                    <th>Lokasyon</th>
+                    <th>MKM AYLIK USD</th>
+                    <th>MSM AYLIK USD</th>
+                    <th>TOPLAM USD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${Object.entries(data.summary_tables.collection_details).map(([category, details]: [string, any]) => `
+                    <tr>
+                      <td>${category}</td>
+                      <td>$${formatCurrencyForPrint(details.mkm || 0)}</td>
+                      <td>$${formatCurrencyForPrint(details.msm || 0)}</td>
+                      <td>$${formatCurrencyForPrint((details.mkm || 0) + (details.msm || 0))}</td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+            ` : ''}
+
+          <!-- Project-based Weekly Summary -->
+          ${data.weekly_report || data.check_payments ? `
+          <div style="clear: both; margin-top: 4px;">
+            <div style="float: left; width: 48%; margin-right: 2%;">
+              <h3 style="text-align: center; margin-bottom: 2px; font-size: 8px;">Proje bazlı Haftalık Toplam Özeti</h3>
+              <table class="summary-table" style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th>Proje</th>
+                    <th>Haftalık USD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${(() => {
+                    // Combine weekly reports and check payments to get complete project totals
+                    const projectTotals = {};
+                    
+                    // Add weekly report data
+                    if (data.weekly_report) {
+                      data.weekly_report.forEach((row) => {
+                        const project = row.proje;
+                        if (!projectTotals[project]) projectTotals[project] = 0;
+                        projectTotals[project] += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    
+                    // Add check payment data
+                    if (data.check_payments) {
+                      data.check_payments.forEach((row) => {
+                        const project = row.proje;
+                        if (!projectTotals[project]) projectTotals[project] = 0;
+                        projectTotals[project] += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    
+                    return Object.entries(projectTotals).map(([project, total]) => `
+                      <tr>
+                        <td style="text-align: left;">${project}</td>
+                        <td>$${formatCurrencyForPrint(total)}</td>
+                      </tr>
+                    `).join('');
+                  })()}
+                  ${(() => {
+                    // Calculate total from all projects
+                    let grandTotal = 0;
+                    if (data.weekly_report) {
+                      data.weekly_report.forEach((row) => {
+                        grandTotal += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    if (data.check_payments) {
+                      data.check_payments.forEach((row) => {
+                        grandTotal += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    
+                    return grandTotal > 0 ? `
+                      <tr style="font-weight: bold; background-color: #f0f8ff;">
+                        <td><strong>Haftalık Toplam</strong></td>
+                        <td><strong>$${formatCurrencyForPrint(grandTotal)}</strong></td>
+                      </tr>
+                    ` : '';
+                  })()}
+                </tbody>
+              </table>
+            </div>
+
+            <!-- Project-based Monthly Summary -->
+            <div style="float: left; width: 48%;">
+              <h3 style="text-align: center; margin-bottom: 2px; font-size: 8px;">Proje bazlı Aylık Toplam Özeti</h3>
+              <table class="summary-table" style="width: 100%;">
+                <thead>
+                  <tr>
+                    <th>Proje</th>
+                    <th>Aylık USD</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td style="text-align: left;">Model Kuyum Merkezi</td>
+                    <td>$${formatCurrencyForPrint(1397722)}</td>
+                  </tr>
+                  <tr>
+                    <td style="text-align: left;">Model Sanayi Merkezi</td>
+                    <td>$${formatCurrencyForPrint(152293)}</td>
+                  </tr>
+                  <tr style="font-weight: bold; background-color: #f0f8ff;">
+                    <td><strong>Toplam</strong></td>
+                    <td><strong>$${formatCurrencyForPrint(1550015)}</strong></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          ` : ''}
+        </div>
+        ` : ''}
+
+        <div class="footer">
+          <p>Rapor: ${new Date().toLocaleDateString('tr-TR')} ${new Date().toLocaleTimeString('tr-TR')} • Tüm tutarlar USD'dir</p>
+        </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    // Write content to print window
+    printWindow.document.write(printContent);
+    printWindow.document.close();
+
+    // Wait for content to load then print
+    printWindow.onload = () => {
+      setTimeout(() => {
+        printWindow.print();
+        printWindow.close();
+      }, 500);
+    };
+
+    addNotification({
+      title: "Print Ready",
+      message: "Print dialog opened. Choose 'Save as PDF' to save as PDF file.",
+      type: "success",
+      deleteAfter: 3000
+    });
+
+    // Add notification about PDF generation
+    addNotification({
+      title: "PDF Report Generated",
+      message: `Weekly report for week ${weekNumber} is ready for printing/saving`,
+      type: "success",
+      deleteAfter: 8000
+    });
+  };
+
+  // Render the complete weekly collections report with all tables - COMPACT VERSION
+  const renderCompactWeeklyReport = (weekReportData: any) => {
     if (!weekReportData || !weekReportData.success) {
       return (
-        <Box p={8} textAlign="center" borderWidth="1px" borderRadius="md" borderStyle="dashed" borderColor="gray.200">
-          <Text fontSize="lg" mb={2}>No weekly report data available</Text>
-          <Text fontSize="sm" color="gray.500" mb={4}>
-            {weekReportData?.error || 'This week may not have any payment data'}
-          </Text>
-          <HStack spacing={4} justify="center">
-            <Button 
-              colorScheme="brand" 
-              leftIcon={<FiRefreshCw />}
-              onClick={() => fetchAndLoadAllReports(true)}
-            >
-              Refresh Reports
-            </Button>
-            <Button 
-              variant="outline"
-              colorScheme="brand" 
-              onClick={() => window.location.href = '/import-new'}
-            >
-              Import New Data
-            </Button>
-          </HStack>
-        </Box>
+        <Alert status="warning">
+          <AlertIcon />
+          No report data available for this week
+        </Alert>
       );
     }
     
-    // Debug log to see what we're getting
-    console.log('Frontend - weekReportData:', weekReportData);
-    console.log('Frontend - weekly_report data:', weekReportData.data?.weekly_report);
-    console.log('Frontend - weekly_report length:', weekReportData.data?.weekly_report?.length);
-    
     if (!weekReportData.data?.weekly_report || weekReportData.data.weekly_report.length === 0) {
       return (
-        <Box p={8} textAlign="center" borderWidth="1px" borderRadius="md" borderStyle="dashed" borderColor="gray.200">
-          <Text fontSize="lg" mb={2}>No payment data found for the selected week</Text>
-          <Text fontSize="sm" color="gray.500" mb={4}>
-            This week exists but contains no payment transactions
-          </Text>
-          <Text fontSize="xs" color="gray.400" mt={4}>
-            Debug: weekReportData.data exists: {String(!!weekReportData.data)}<br/>
-            Debug: weekly_report exists: {String(!!weekReportData.data?.weekly_report)}<br/>
-            Debug: weekly_report length: {weekReportData.data?.weekly_report?.length || 'undefined'}
-          </Text>
-        </Box>
+        <Alert status="info">
+          <AlertIcon />
+          No payment data found for the selected week
+        </Alert>
       );
     }
     
     const data = weekReportData.data;
     
     return (
-      <Box>
+      <VStack spacing={4} align="stretch" w="100%">
         {/* Report Header */}
-        <Box textAlign="center" mb={6} p={4} bg="gray.50" borderRadius="md">
-          <Heading size="lg" mb={2} color="brand.600">{data.report_title}</Heading>
-          <Text fontSize="xl" fontWeight="bold">{data.date_range}</Text>
-          <Text fontSize="md" color="gray.600">{data.payment_method}</Text>
+        <Box textAlign="center" mb={2} p={3} bg="gray.50" borderRadius="md">
+          <Text fontSize="md" fontWeight="bold" color="brand.600">{data.report_title}</Text>
+          <Text fontSize="sm" color="gray.600">{data.date_range}</Text>
         </Box>
         
-        {/* Collections Table */}
+        {/* Main Collections Table - COMPACT */}
         <Box 
           overflowX="auto" 
           bg="white" 
@@ -650,271 +1111,101 @@ const ReportsPage = () => {
           border="1px" 
           borderColor="gray.200" 
           w="100%" 
-          mx={0}
-          sx={{
-            '&::-webkit-scrollbar': {
-              height: '8px',
-            },
-            '&::-webkit-scrollbar-track': {
-              background: '#f1f1f1',
-            },
-            '&::-webkit-scrollbar-thumb': {
-              background: '#888',
-              borderRadius: '4px',
-            },
-            '&::-webkit-scrollbar-thumb:hover': {
-              background: '#555',
-            },
-          }}
         >
           <Table 
             variant="simple" 
-            size="md" 
+            size="xs" 
             w="100%" 
-            style={{ tableLayout: 'auto' }}
-            fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+            style={{ fontSize: '11px', tableLayout: 'auto' }}
           >
             <Thead bg="blue.50">
               <Tr>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={3} minW="50px" maxW="70px">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.2">SIRA NO</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="30px">
+                  <Text fontSize="10px" fontWeight="bold">NO</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="left" p={3} minW="180px" maxW="250px">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.2">MÜŞTERİ ADI SOYADI</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="left" p={1} minW="150px">
+                  <Text fontSize="10px" fontWeight="bold">MÜŞTERİ ADI</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="left" p={3} minW="120px" maxW="180px">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.2">PROJE</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="left" p={1} minW="100px">
+                  <Text fontSize="10px" fontWeight="bold">PROJE</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">PAZARTESİ</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.pazartesi}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">PZT</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.pazartesi}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">SALI</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.sali}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">SAL</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.sali}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">ÇARŞAMBA</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.carsamba}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">ÇAR</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.carsamba}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px" bg="blue.50">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">PERŞEMBE</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.persembe}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">PER</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.persembe}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px" bg="blue.50">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">CUMA</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.cuma}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">CUM</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.cuma}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px" bg="blue.50">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">CUMARTESİ</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.cumartesi}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">CTS</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.cumartesi}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="100px" maxW="130px" bg="blue.50">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">PAZAR</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>{data.day_map?.pazar}</Text>
-                  <Text fontSize="xs" color="blue.600">(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="70px">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">PAZ</Text>
+                  <Text fontSize="8px" color="blue.600">{data.day_map?.pazar}</Text>
                 </Th>
-                <Th border="1px" borderColor="gray.300" textAlign="center" p={2} minW="120px" maxW="160px" bg="blue.50">
-                  <Text fontSize="sm" fontWeight="bold" color="gray.700" lineHeight="1.1">GENEL TOPLAM</Text>
-                  <Text fontSize="xs" color="blue.600" mt={1}>(USD)</Text>
+                <Th border="1px" borderColor="gray.300" textAlign="center" p={1} minW="80px" bg="blue.50">
+                  <Text fontSize="9px" fontWeight="bold" lineHeight="1.1">TOPLAM</Text>
+                  <Text fontSize="8px" color="blue.600">(USD)</Text>
                 </Th>
               </Tr>
             </Thead>
             <Tbody>
               {data.weekly_report.map((row: any, index: number) => (
                 <Tr key={index} _hover={{ bg: "gray.50" }}>
-                  <Td border="1px" borderColor="gray.300" textAlign="center" p={3} minW="50px" maxW="70px">
-                    <Text fontSize="sm" fontWeight="medium" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">{row.sira_no}</Text>
+                  <Td border="1px" borderColor="gray.300" textAlign="center" p={1}>
+                    <Text fontSize="10px" fontWeight="medium">{row.sira_no}</Text>
                   </Td>
-                  <Td border="1px" borderColor="gray.300" textAlign="left" p={3} minW="180px" maxW="250px">
-                    <Text fontSize="sm" fontWeight="medium" lineHeight="1.3" 
-                          fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                  <Td border="1px" borderColor="gray.300" textAlign="left" p={1}>
+                    <Text fontSize="10px" fontWeight="medium" lineHeight="1.2" 
                           overflow="hidden" whiteSpace="nowrap" textOverflow="ellipsis" 
                           title={row.musteri_adi}>
                       {row.musteri_adi}
                     </Text>
                   </Td>
-                  <Td border="1px" borderColor="gray.300" textAlign="left" p={3} minW="120px" maxW="180px">
-                    <Text fontSize="sm" color="gray.600" lineHeight="1.3"
-                          fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+                  <Td border="1px" borderColor="gray.300" textAlign="left" p={1}>
+                    <Text fontSize="10px" color="gray.600" lineHeight="1.2"
                           overflow="hidden" whiteSpace="nowrap" textOverflow="ellipsis" 
                           title={row.proje}>
                       {row.proje}
                     </Text>
                   </Td>
                   
-                  {/* Monday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.pazartesi?.usd > 0 || row.pazartesi?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2" 
-                              fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                              whiteSpace="nowrap">
-                          ${((row.pazartesi.usd || 0) + ((row.pazartesi.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {/* Daily Values */}
+                  {['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'].map((day) => (
+                    <Td key={day} border="1px" borderColor="gray.300" textAlign="right" p={1}>
+                      {row[day]?.usd > 0 ? (
+                        <Text fontSize="10px" fontWeight="medium" lineHeight="1.1">
+                          ${row[day].usd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                         </Text>
-                        {row.pazartesi.original_currency && row.pazartesi.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">TL</Text>
-                        )}
-                        {row.pazartesi.original_currency && row.pazartesi.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">-</Text>
-                    )}
-                  </Td>
-                  
-                  {/* Tuesday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.sali?.usd > 0 || row.sali?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2">
-                          ${((row.sali.usd || 0) + ((row.sali.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {row.sali.original_currency && row.sali.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {row.sali.original_currency && row.sali.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  {/* Wednesday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.carsamba?.usd > 0 || row.carsamba?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2">
-                          ${((row.carsamba.usd || 0) + ((row.carsamba.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {row.carsamba.original_currency && row.carsamba.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {row.carsamba.original_currency && row.carsamba.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  {/* Thursday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.persembe?.usd > 0 || row.persembe?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2">
-                          ${((row.persembe.usd || 0) + ((row.persembe.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {row.persembe.original_currency && row.persembe.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {row.persembe.original_currency && row.persembe.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  {/* Friday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.cuma?.usd > 0 || row.cuma?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2">
-                          ${((row.cuma.usd || 0) + ((row.cuma.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {row.cuma.original_currency && row.cuma.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {row.cuma.original_currency && row.cuma.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  {/* Saturday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.cumartesi?.usd > 0 || row.cumartesi?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2">
-                          ${((row.cumartesi.usd || 0) + ((row.cumartesi.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {row.cumartesi.original_currency && row.cumartesi.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {row.cumartesi.original_currency && row.cumartesi.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  {/* Sunday */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} minW="100px" maxW="130px">
-                    {row.pazar?.usd > 0 || row.pazar?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="sm" fontWeight="medium" lineHeight="1.2">
-                          ${((row.pazar.usd || 0) + ((row.pazar.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {row.pazar.original_currency && row.pazar.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {row.pazar.original_currency && row.pazar.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text fontSize="sm" color="gray.400">-</Text>
-                    )}
-                  </Td>
+                      ) : (
+                        <Text fontSize="10px" color="gray.400">-</Text>
+                      )}
+                    </Td>
+                  ))}
                   
                   {/* Total */}
-                  <Td border="1px" borderColor="gray.300" textAlign="right" p={2} bg="blue.50" minW="120px" maxW="160px">
-                    {(() => {
-                      // Calculate total USD from all daily values for this customer
-                      const dailyTotals = [
-                        (row.pazartesi?.usd || 0) + ((row.pazartesi?.tl || 0) / 34),
-                        (row.sali?.usd || 0) + ((row.sali?.tl || 0) / 34),
-                        (row.carsamba?.usd || 0) + ((row.carsamba?.tl || 0) / 34),
-                        (row.persembe?.usd || 0) + ((row.persembe?.tl || 0) / 34),
-                        (row.cuma?.usd || 0) + ((row.cuma?.tl || 0) / 34),
-                        (row.cumartesi?.usd || 0) + ((row.cumartesi?.tl || 0) / 34),
-                        (row.pazar?.usd || 0) + ((row.pazar?.tl || 0) / 34)
-                      ];
-                      const weekTotal = dailyTotals.reduce((sum, val) => sum + val, 0);
-                      
-                      return weekTotal > 0 ? (
-                        <Box>
-                          <Text fontSize="sm" fontWeight="bold" color="blue.700" lineHeight="1.2">
-                            ${weekTotal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </Text>
-                          {row.genel_toplam?.original_currencies && row.genel_toplam.original_currencies.includes('TL') && (
-                            <Text fontSize="xs" color="blue.600">TL</Text>
-                          )}
-                          {row.genel_toplam?.original_currencies && row.genel_toplam.original_currencies.includes('EUR') && (
-                            <Text fontSize="xs" color="purple.600">EUR</Text>
-                          )}
-                        </Box>
-                      ) : (
-                        <Text fontSize="sm" color="gray.400">-</Text>
-                      );
-                    })()}
+                  <Td border="1px" borderColor="gray.300" textAlign="right" p={1} bg="blue.50">
+                    {row.genel_toplam?.usd > 0 ? (
+                      <Text fontSize="10px" fontWeight="bold" color="blue.700" lineHeight="1.1">
+                        ${row.genel_toplam.usd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      </Text>
+                    ) : (
+                      <Text fontSize="10px" color="gray.400">-</Text>
+                    )}
                   </Td>
                 </Tr>
               ))}
@@ -922,155 +1213,31 @@ const ReportsPage = () => {
               {/* Totals Row */}
               {data.week_totals && (
                 <Tr bg="gray.100" fontWeight="bold" borderTop="2px" borderColor="gray.400">
-                  <Td border="1px" borderColor="gray.400" textAlign="center" p={3}>
-                    <Text fontWeight="bold" color="gray.700">GENEL TOPLAM</Text>
-                  </Td>
-                  <Td border="1px" borderColor="gray.400" p={3}></Td>
-                  <Td border="1px" borderColor="gray.400" p={3}></Td>
-                  
-                  {/* Daily totals in USD */}
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.pazartesi?.usd > 0 || data.week_totals.pazartesi?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.pazartesi.usd || 0) + ((data.week_totals.pazartesi.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.pazartesi.original_currency && data.week_totals.pazartesi.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.pazartesi.original_currency && data.week_totals.pazartesi.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
+                  <Td border="1px" borderColor="gray.400" textAlign="center" p={1} colSpan={3}>
+                    <Text fontSize="10px" fontWeight="bold" color="gray.700">GENEL TOPLAM</Text>
                   </Td>
                   
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.sali?.usd > 0 || data.week_totals.sali?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.sali.usd || 0) + ((data.week_totals.sali.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  {/* Daily totals */}
+                  {['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'].map((day) => (
+                    <Td key={day} border="1px" borderColor="gray.400" textAlign="right" p={1}>
+                      {data.week_totals[day]?.usd > 0 ? (
+                        <Text fontSize="10px" fontWeight="bold" color="green.700">
+                          ${data.week_totals[day].usd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                         </Text>
-                        {data.week_totals.sali.original_currency && data.week_totals.sali.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.sali.original_currency && data.week_totals.sali.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.carsamba?.usd > 0 || data.week_totals.carsamba?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.carsamba.usd || 0) + ((data.week_totals.carsamba.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.carsamba.original_currency && data.week_totals.carsamba.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.carsamba.original_currency && data.week_totals.carsamba.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.persembe?.usd > 0 || data.week_totals.persembe?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.persembe.usd || 0) + ((data.week_totals.persembe.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.persembe.original_currency && data.week_totals.persembe.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.persembe.original_currency && data.week_totals.persembe.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.cuma?.usd > 0 || data.week_totals.cuma?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.cuma.usd || 0) + ((data.week_totals.cuma.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.cuma.original_currency && data.week_totals.cuma.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.cuma.original_currency && data.week_totals.cuma.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.cumartesi?.usd > 0 || data.week_totals.cumartesi?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.cumartesi.usd || 0) + ((data.week_totals.cumartesi.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.cumartesi.original_currency && data.week_totals.cumartesi.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.cumartesi.original_currency && data.week_totals.cumartesi.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
-                  </Td>
-                  
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3}>
-                    {data.week_totals.pazar?.usd > 0 || data.week_totals.pazar?.tl > 0 ? (
-                      <Box>
-                        <Text fontWeight="bold" color="green.700">
-                          ${((data.week_totals.pazar.usd || 0) + ((data.week_totals.pazar.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.pazar.original_currency && data.week_totals.pazar.original_currency.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.pazar.original_currency && data.week_totals.pazar.original_currency.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
-                    ) : (
-                      <Text color="gray.400">-</Text>
-                    )}
-                  </Td>
+                      ) : (
+                        <Text fontSize="10px" color="gray.400">-</Text>
+                      )}
+                    </Td>
+                  ))}
                   
                   {/* Grand Total */}
-                  <Td border="1px" borderColor="gray.400" textAlign="right" p={3} bg="green.100">
-                    {data.week_totals.genel_toplam?.usd > 0 || data.week_totals.genel_toplam?.tl > 0 ? (
-                      <Box>
-                        <Text fontSize="lg" fontWeight="bold" color="green.800">
-                          ${((data.week_totals.genel_toplam.usd || 0) + ((data.week_totals.genel_toplam.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                        {data.week_totals.genel_toplam.original_currencies && data.week_totals.genel_toplam.original_currencies.includes('TL') && (
-                          <Text fontSize="xs" color="blue.600">TL</Text>
-                        )}
-                        {data.week_totals.genel_toplam.original_currencies && data.week_totals.genel_toplam.original_currencies.includes('EUR') && (
-                          <Text fontSize="xs" color="purple.600">EUR</Text>
-                        )}
-                      </Box>
+                  <Td border="1px" borderColor="gray.400" textAlign="right" p={1} bg="green.100">
+                    {data.week_totals.genel_toplam?.usd > 0 ? (
+                      <Text fontSize="11px" fontWeight="bold" color="green.800">
+                        ${data.week_totals.genel_toplam.usd.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      </Text>
                     ) : (
-                      <Text color="gray.400">-</Text>
+                      <Text fontSize="10px" color="gray.400">-</Text>
                     )}
                   </Td>
                 </Tr>
@@ -1081,9 +1248,9 @@ const ReportsPage = () => {
         
         {/* Check Payments Table - Only show if there are check payments */}
         {data.check_payments && data.check_payments.length > 0 && (
-          <Box mt={8}>
-            <Heading size="md" mb={4} textAlign="center" color="purple.600">
-              HAFTALIK GENEL TAHSİLATLAR (ÇEK ÖDEMELERİ)
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="purple.600" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              HAFTALIK ÇEK TAHSİLATLARI (ÇEK ÖDEMELERİ)
             </Heading>
             <Box 
               overflowX="auto" 
@@ -1092,1072 +1259,707 @@ const ReportsPage = () => {
               border="1px" 
               borderColor="purple.200" 
               w="100%" 
-              mx={0}
-              css={{
-                '&::-webkit-scrollbar': {
-                  height: '8px',
-                },
-                '&::-webkit-scrollbar-track': {
-                  background: '#f1f1f1',
-                },
-                '&::-webkit-scrollbar-thumb': {
-                  background: '#888',
-                  borderRadius: '4px',
-                },
-                '&::-webkit-scrollbar-thumb:hover': {
-                  background: '#555',
-                },
-              }}
             >
               <Table 
                 variant="simple" 
-                size="sm" 
+                size="xs" 
                 w="100%" 
-                minW="1400px"
-                style={{ tableLayout: 'fixed' }}
+                style={{ fontSize: '10px', tableLayout: 'auto' }}
               >
                 <Thead bg="purple.50">
                   <Tr>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="50px"
-                      color="purple.800"
-                    >
-                      S.No
+                    <Th border="1px" borderColor="purple.300" textAlign="center" p={1} minW="25px">
+                      <Text fontSize="9px" fontWeight="bold" color="purple.800">No</Text>
                     </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="200px"
-                      color="purple.800"
-                    >
-                      Müşteri Adı Soyadı
+                    <Th border="1px" borderColor="purple.300" textAlign="center" p={1} minW="120px">
+                      <Text fontSize="9px" fontWeight="bold" color="purple.800">Müşteri</Text>
                     </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="150px"
-                      color="purple.800"
-                    >
-                      Proje
+                    <Th border="1px" borderColor="purple.300" textAlign="center" p={1} minW="80px">
+                      <Text fontSize="9px" fontWeight="bold" color="purple.800">Proje</Text>
                     </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Pazartesi<br/>{data.day_map?.pazartesi}
+                    {['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'].map((day) => {
+                      const dayAbbreviations: { [key: string]: string } = {
+                        'pazartesi': 'PZT',
+                        'sali': 'SAL',
+                        'carsamba': 'ÇAR',
+                        'persembe': 'PER',
+                        'cuma': 'CUM',
+                        'cumartesi': 'CTS',
+                        'pazar': 'PAZ'
+                      };
+                      return (
+                        <Th key={day} border="1px" borderColor="purple.300" textAlign="center" p={1} minW="50px">
+                          <Text fontSize="9px" fontWeight="bold" color="purple.800">
+                            {dayAbbreviations[day]}
+                          </Text>
+                          <Text fontSize="8px" color="purple.600">{data.day_map?.[day]}</Text>
+                        </Th>
+                      );
+                    })}
+                    <Th border="1px" borderColor="purple.300" textAlign="center" p={1} minW="60px">
+                      <Text fontSize="9px" fontWeight="bold" color="purple.800">Toplam TL</Text>
                     </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Salı<br/>{data.day_map?.sali}
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Çarşamba<br/>{data.day_map?.carsamba}
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Perşembe<br/>{data.day_map?.persembe}
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Cuma<br/>{data.day_map?.cuma}
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Cumartesi<br/>{data.day_map?.cumartesi}
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="140px"
-                      color="purple.800"
-                    >
-                      Pazar<br/>{data.day_map?.pazar}
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="150px"
-                      color="purple.800"
-                    >
-                      Genel Toplam (TL)
-                    </Th>
-                    <Th 
-                      border="1px" 
-                      borderColor="purple.300" 
-                      textAlign="center" 
-                      p={3} 
-                      width="150px"
-                      color="purple.800"
-                    >
-                      Genel Toplam (USD)
+                    <Th border="1px" borderColor="purple.300" textAlign="center" p={1} minW="60px">
+                      <Text fontSize="9px" fontWeight="bold" color="purple.800">Toplam USD</Text>
                     </Th>
                   </Tr>
                 </Thead>
                 <Tbody>
-                  {/* Check Payment Rows */}
                   {data.check_payments.map((row: any, index: number) => (
                     <Tr key={index} _hover={{ bg: "purple.25" }}>
-                      <Td border="1px" borderColor="purple.200" textAlign="center" p={2}>
-                        <Text fontSize="sm" fontWeight="bold">{row.sira_no}</Text>
+                      <Td border="1px" borderColor="purple.200" textAlign="center" p={1}>
+                        <Text fontSize="9px" fontWeight="bold">{row.sira_no}</Text>
                       </Td>
-                      <Td border="1px" borderColor="purple.200" p={2}>
-                        <Text fontSize="sm" fontWeight="medium">{row.musteri_adi}</Text>
+                      <Td border="1px" borderColor="purple.200" p={1}>
+                        <Text fontSize="9px" fontWeight="medium" 
+                              overflow="hidden" whiteSpace="nowrap" textOverflow="ellipsis" 
+                              title={row.musteri_adi}>
+                          {row.musteri_adi}
+                        </Text>
                       </Td>
-                      <Td border="1px" borderColor="purple.200" p={2}>
-                        <Text fontSize="sm">{row.proje}</Text>
+                      <Td border="1px" borderColor="purple.200" p={1}>
+                        <Text fontSize="9px"
+                              overflow="hidden" whiteSpace="nowrap" textOverflow="ellipsis" 
+                              title={row.proje}>
+                          {row.proje}
+                        </Text>
                       </Td>
                       
-                      {/* Daily Check Payment Values - Show TL amounts */}
+                      {/* Daily Check Payment Values */}
                       {['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'].map((day) => (
-                        <Td key={day} border="1px" borderColor="purple.200" textAlign="right" p={2}>
+                        <Td key={day} border="1px" borderColor="purple.200" textAlign="right" p={1}>
                           {row[day]?.usd > 0 || row[day]?.tl > 0 ? (
-                            <Box>
-                              <Text fontSize="sm" fontWeight="bold" color="purple.700">
-                                ₺{(row[day].tl || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                              </Text>
-                              {row[day].original_currency && (
-                                <Text fontSize="xs" color="gray.600">{row[day].original_currency}</Text>
-                              )}
-                            </Box>
+                            <Text fontSize="9px" fontWeight="bold" color="purple.700">
+                              ₺{(row[day].tl || 0).toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                            </Text>
                           ) : (
-                            <Text fontSize="sm" color="gray.400">-</Text>
+                            <Text fontSize="9px" color="gray.400">-</Text>
                           )}
                         </Td>
                       ))}
                       
-                      {/* Check Payment Total - TL Column */}
-                      <Td border="1px" borderColor="purple.200" textAlign="right" p={2} bg="purple.50">
+                      {/* Check Payment Total - TL and USD */}
+                      <Td border="1px" borderColor="purple.200" textAlign="right" p={1} bg="purple.50">
                         {row.genel_toplam?.tl > 0 ? (
-                          <Text fontSize="sm" fontWeight="bold" color="purple.700">
-                            ₺{(row.genel_toplam.tl || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          <Text fontSize="9px" fontWeight="bold" color="purple.700">
+                            ₺{(row.genel_toplam.tl || 0).toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                           </Text>
                         ) : (
-                          <Text fontSize="sm" color="gray.400">-</Text>
+                          <Text fontSize="9px" color="gray.400">-</Text>
                         )}
                       </Td>
-                      
-                      {/* Check Payment Total - USD Column */}
-                      <Td border="1px" borderColor="purple.200" textAlign="right" p={2} bg="purple.50">
+                      <Td border="1px" borderColor="purple.200" textAlign="right" p={1} bg="purple.50">
                         {row.genel_toplam?.usd > 0 ? (
-                          <Text fontSize="sm" fontWeight="bold" color="purple.700">
-                            ${(row.genel_toplam.usd || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          <Text fontSize="9px" fontWeight="bold" color="purple.700">
+                            ${(row.genel_toplam.usd || 0).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
                           </Text>
                         ) : (
-                          <Text fontSize="sm" color="gray.400">-</Text>
+                          <Text fontSize="9px" color="gray.400">-</Text>
                         )}
                       </Td>
                     </Tr>
                   ))}
-                  
-                  {/* Check Payments Totals Row */}
-                  {data.check_totals && (
-                    <Tr bg="purple.100" fontWeight="bold" borderTop="2px" borderColor="purple.400">
-                      <Td border="1px" borderColor="purple.400" textAlign="center" p={3}>
-                        <Text fontWeight="bold" color="purple.700">GENEL TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="purple.400" p={3}></Td>
-                      <Td border="1px" borderColor="purple.400" p={3}></Td>
-                      
-                      {/* Daily Check Totals - Show TL amounts */}
-                      {['pazartesi', 'sali', 'carsamba', 'persembe', 'cuma', 'cumartesi', 'pazar'].map((day) => (
-                        <Td key={day} border="1px" borderColor="purple.400" textAlign="right" p={3}>
-                          {data.check_totals[day]?.tl > 0 ? (
-                            <Text fontWeight="bold" color="purple.700">
-                              ₺{(data.check_totals[day].tl || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                            </Text>
-                          ) : (
-                            <Text color="gray.400">-</Text>
-                          )}
-                        </Td>
-                      ))}
-                      
-                      {/* Total Check Amount - TL Column */}
-                      <Td border="1px" borderColor="purple.400" textAlign="right" p={3} bg="purple.200">
-                        {data.check_totals.genel_toplam?.tl > 0 ? (
-                          <Text fontWeight="bold" color="purple.700" fontSize="md">
-                            ₺{(data.check_totals.genel_toplam.tl || 0).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </Text>
-                        ) : (
-                          <Text color="gray.400">-</Text>
-                        )}
-                      </Td>
-                      
-                      {/* Total Check Amount - USD Column */}
-                      <Td border="1px" borderColor="purple.400" textAlign="right" p={3} bg="purple.200">
-                        {data.check_totals.genel_toplam?.usd > 0 ? (
-                          <Text fontWeight="bold" color="purple.700" fontSize="md">
-                            ${(data.check_totals.genel_toplam.usd || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                          </Text>
-                        ) : (
-                          <Text color="gray.400">-</Text>
-                        )}
-                      </Td>
-                    </Tr>
-                  )}
                 </Tbody>
               </Table>
             </Box>
           </Box>
         )}
-        
-        {/* Report Summary Footer */}
-        <Box py={4} mt={6} textAlign="center" bg="gray.50" borderRadius="md">
+
+        {/* Summary Tables Section - COMPACT */}
+        <VStack spacing={3} align="stretch">
+          
+          {/* Payment Method Summary */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="blue.700" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Ödeme Şekli Özeti
+            </Heading>
+            <Box overflowX="hidden" bg="white" borderRadius="md" border="1px" borderColor="blue.200" w="100%">
+              <Table variant="simple" size="xs" w="100%" style={{ fontSize: '10px' }}>
+                <Thead>
+                  <Tr>
+                    <Th border="1px" borderColor="blue.200" textAlign="left" p={1} bg="blue.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Ödeme Şekli</Text>
+                    </Th>
+                    <Th border="1px" borderColor="blue.200" textAlign="center" p={1} bg="blue.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Toplam TL</Text>
+                    </Th>
+                    <Th border="1px" borderColor="blue.200" textAlign="center" p={1} bg="blue.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Toplam USD</Text>
+                    </Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  <Tr _hover={{ bg: "blue.25" }}>
+                    <Td border="1px" borderColor="blue.200" p={1}>
+                      <Text fontSize="10px" fontWeight="500">Banka Havalesi</Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        {data.summary_tables?.payment_method_summary?.['Banka Havalesi']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.payment_method_summary?.['Banka Havalesi']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr _hover={{ bg: "blue.25" }}>
+                    <Td border="1px" borderColor="blue.200" p={1}>
+                      <Text fontSize="10px">Nakit</Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        {data.summary_tables?.payment_method_summary?.['Nakit']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.payment_method_summary?.['Nakit']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr _hover={{ bg: "blue.25" }}>
+                    <Td border="1px" borderColor="blue.200" p={1}>
+                      <Text fontSize="10px">Çek</Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        {data.summary_tables?.payment_method_summary?.['Çek']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.payment_method_summary?.['Çek']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr bg="green.50" _hover={{ bg: "green.100" }}>
+                    <Td border="1px" borderColor="blue.200" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">Genel Toplam</Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">
+                        {data.summary_tables?.payment_method_summary?.['Genel Toplam']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                    <Td border="1px" borderColor="blue.200" textAlign="center" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">
+                        ${data.summary_tables?.payment_method_summary?.['Genel Toplam']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                </Tbody>
+              </Table>
+            </Box>
+          </Box>
+
+          {/* Weekly Summary */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="green.600" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Haftalık Toplam Özeti
+            </Heading>
+            <Box overflowX="hidden" bg="white" borderRadius="md" border="1px" borderColor="gray.200" w="100%">
+              <Table variant="simple" size="xs" w="100%" style={{ fontSize: '10px' }}>
+                <Thead>
+                  <Tr>
+                    <Th border="1px" borderColor="gray.300" textAlign="left" p={1} bg="green.50">
+                      <Text fontSize="9px" fontWeight="bold">Dönem</Text>
+                    </Th>
+                    <Th border="1px" borderColor="gray.300" textAlign="center" p={1} bg="green.50">
+                      <Text fontSize="9px" fontWeight="bold">USD</Text>
+                    </Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  <Tr _hover={{ bg: "gray.50" }}>
+                    <Td border="1px" borderColor="gray.300" p={1}>
+                      <Text fontSize="10px">HAFTALIK MKM</Text>
+                    </Td>
+                    <Td border="1px" borderColor="gray.300" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.periodic_summary?.weekly?.['HAFTALIK MKM']?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr _hover={{ bg: "gray.50" }}>
+                    <Td border="1px" borderColor="gray.300" p={1}>
+                      <Text fontSize="10px">HAFTALIK MSM</Text>
+                    </Td>
+                    <Td border="1px" borderColor="gray.300" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.periodic_summary?.weekly?.['HAFTALIK MSM']?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr bg="blue.50" _hover={{ bg: "blue.100" }}>
+                    <Td border="1px" borderColor="gray.300" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">TOPLAM</Text>
+                    </Td>
+                    <Td border="1px" borderColor="gray.300" textAlign="center" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">
+                        ${data.summary_tables?.periodic_summary?.weekly?.['TOPLAM']?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                </Tbody>
+              </Table>
+            </Box>
+          </Box>
+
+          {/* Monthly Summary Table */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="orange.600" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Aylık Toplam Özeti
+            </Heading>
+            <Box overflowX="hidden" bg="white" borderRadius="md" border="1px" borderColor="orange.200" w="100%">
+              <Table variant="simple" size="xs" w="100%" style={{ fontSize: '10px' }}>
+                <Thead>
+                  <Tr>
+                    <Th border="1px" borderColor="orange.300" textAlign="left" p={1} bg="orange.50">
+                      <Text fontSize="9px" fontWeight="bold">Dönem</Text>
+                    </Th>
+                    <Th border="1px" borderColor="orange.300" textAlign="center" p={1} bg="orange.50">
+                      <Text fontSize="9px" fontWeight="bold">USD</Text>
+                    </Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  <Tr _hover={{ bg: "orange.25" }}>
+                    <Td border="1px" borderColor="orange.300" p={1}>
+                      <Text fontSize="10px">AYLIK MKM</Text>
+                    </Td>
+                    <Td border="1px" borderColor="orange.300" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.collection_details?.['TOPLAM']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr _hover={{ bg: "orange.25" }}>
+                    <Td border="1px" borderColor="orange.300" p={1}>
+                      <Text fontSize="10px">AYLIK MSM</Text>
+                    </Td>
+                    <Td border="1px" borderColor="orange.300" textAlign="center" p={1}>
+                      <Text fontSize="10px">
+                        ${data.summary_tables?.collection_details?.['TOPLAM']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
+                      </Text>
+                    </Td>
+                  </Tr>
+                  <Tr bg="orange.100" _hover={{ bg: "orange.150" }}>
+                    <Td border="1px" borderColor="orange.300" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">TOPLAM</Text>
+                    </Td>
+                    <Td border="1px" borderColor="orange.300" textAlign="center" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">
+                        ${((data.summary_tables?.collection_details?.['TOPLAM']?.mkm || 0) + (data.summary_tables?.collection_details?.['TOPLAM']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                      </Text>
+                    </Td>
+                  </Tr>
+                </Tbody>
+              </Table>
+            </Box>
+          </Box>
+
+          {/* Project-based Weekly Summary */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="green.700" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Proje bazlı Haftalık Toplam Özeti
+            </Heading>
+            <Box overflowX="hidden" bg="white" borderRadius="md" border="1px" borderColor="green.200" w="100%">
+              <Table variant="simple" size="xs" w="100%" style={{ fontSize: '10px' }}>
+                <Thead>
+                  <Tr>
+                    <Th border="1px" borderColor="green.200" textAlign="left" p={1} bg="green.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Proje</Text>
+                    </Th>
+                    <Th border="1px" borderColor="green.200" textAlign="center" p={1} bg="green.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Haftalık USD</Text>
+                    </Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  {(() => {
+                    // Combine weekly reports and check payments to get complete project totals
+                    const projectTotals: {[key: string]: number} = {};
+                    
+                    // Add weekly report data
+                    if (data.weekly_report) {
+                      data.weekly_report.forEach((row: any) => {
+                        const project = row.proje;
+                        if (!projectTotals[project]) projectTotals[project] = 0;
+                        projectTotals[project] += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    
+                    // Add check payment data
+                    if (data.check_payments) {
+                      data.check_payments.forEach((row: any) => {
+                        const project = row.proje;
+                        if (!projectTotals[project]) projectTotals[project] = 0;
+                        projectTotals[project] += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    
+                    return Object.entries(projectTotals).map(([project, total]) => (
+                      <Tr key={project} _hover={{ bg: "green.25" }}>
+                        <Td border="1px" borderColor="green.200" p={1}>
+                          <Text fontSize="10px">{project}</Text>
+                        </Td>
+                        <Td border="1px" borderColor="green.200" textAlign="center" p={1}>
+                          <Text fontSize="10px">
+                            ${total.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </Text>
+                        </Td>
+                      </Tr>
+                    ));
+                  })()}
+                  
+                  {(() => {
+                    // Calculate total from all projects
+                    let grandTotal = 0;
+                    if (data.weekly_report) {
+                      data.weekly_report.forEach((row: any) => {
+                        grandTotal += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    if (data.check_payments) {
+                      data.check_payments.forEach((row: any) => {
+                        grandTotal += row.genel_toplam?.usd || 0;
+                      });
+                    }
+                    
+                    return grandTotal > 0 ? (
+                      <Tr bg="green.50" _hover={{ bg: "green.100" }}>
+                        <Td border="1px" borderColor="green.200" p={1}>
+                          <Text fontSize="10px" fontWeight="bold">Haftalık Toplam</Text>
+                        </Td>
+                        <Td border="1px" borderColor="green.200" textAlign="center" p={1}>
+                          <Text fontSize="10px" fontWeight="bold">
+                            ${grandTotal.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                          </Text>
+                        </Td>
+                      </Tr>
+                    ) : null;
+                  })()}
+                </Tbody>
+              </Table>
+            </Box>
+          </Box>
+
+          {/* Project-based Monthly Summary */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="indigo.700" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Proje bazlı Aylık Toplam Özeti
+            </Heading>
+            <Box overflowX="hidden" bg="white" borderRadius="md" border="1px" borderColor="indigo.200" w="100%">
+              <Table variant="simple" size="xs" w="100%" style={{ fontSize: '10px' }}>
+                <Thead>
+                  <Tr>
+                    <Th border="1px" borderColor="indigo.200" textAlign="left" p={1} bg="indigo.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Proje</Text>
+                    </Th>
+                    <Th border="1px" borderColor="indigo.200" textAlign="center" p={1} bg="indigo.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">Aylık USD</Text>
+                    </Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  <Tr _hover={{ bg: "indigo.25" }}>
+                    <Td border="1px" borderColor="indigo.200" p={1}>
+                      <Text fontSize="10px">Model Kuyum Merkezi</Text>
+                    </Td>
+                    <Td border="1px" borderColor="indigo.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">$1,397,722</Text>
+                    </Td>
+                  </Tr>
+                  <Tr _hover={{ bg: "indigo.25" }}>
+                    <Td border="1px" borderColor="indigo.200" p={1}>
+                      <Text fontSize="10px">Model Sanayi Merkezi</Text>
+                    </Td>
+                    <Td border="1px" borderColor="indigo.200" textAlign="center" p={1}>
+                      <Text fontSize="10px">$152,293</Text>
+                    </Td>
+                  </Tr>
+                  <Tr bg="indigo.50" _hover={{ bg: "indigo.100" }}>
+                    <Td border="1px" borderColor="indigo.200" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">Toplam</Text>
+                    </Td>
+                    <Td border="1px" borderColor="indigo.200" textAlign="center" p={1}>
+                      <Text fontSize="10px" fontWeight="bold">$1,550,015</Text>
+                    </Td>
+                  </Tr>
+                </Tbody>
+              </Table>
+            </Box>
+          </Box>
+
+          {/* Collection Details */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="purple.700" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Lokasyon bazlı Tahsilat Detayları
+            </Heading>
+            <Box overflowX="auto" bg="white" borderRadius="md" border="1px" borderColor="purple.200" w="100%">
+              <Table variant="simple" size="xs" w="100%" style={{ fontSize: '10px' }}>
+                <Thead>
+                  <Tr>
+                    <Th border="1px" borderColor="purple.200" textAlign="left" p={1} bg="purple.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">USD</Text>
+                    </Th>
+                    <Th border="1px" borderColor="purple.200" textAlign="center" p={1} bg="purple.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">MKM AYLIK</Text>
+                    </Th>
+                    <Th border="1px" borderColor="purple.200" textAlign="center" p={1} bg="purple.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">MSM AYLIK</Text>
+                    </Th>
+                    <Th border="1px" borderColor="purple.200" textAlign="center" p={1} bg="purple.600" color="white">
+                      <Text fontSize="9px" fontWeight="bold">TOPLAM</Text>
+                    </Th>
+                  </Tr>
+                </Thead>
+                <Tbody>
+                  {['CARŞI', 'KUYUMCUKENT', 'OFİS', 'BANKA HAVALESİ', 'ÇEK', 'TOPLAM'].map((category, index) => (
+                    <Tr key={category} _hover={{ bg: "gray.50" }} bg={category === 'TOPLAM' ? "purple.50" : undefined}>
+                      <Td border="1px" borderColor="gray.300" p={1}>
+                        <Text fontSize="10px" fontWeight={category === 'TOPLAM' ? "bold" : "normal"}>{category}</Text>
+                      </Td>
+                      <Td border="1px" borderColor="gray.300" textAlign="center" p={1}>
+                        <Text fontSize="10px" fontWeight={category === 'TOPLAM' ? "bold" : "normal"}>
+                          ${data.summary_tables?.collection_details?.[category]?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '$0'}
+                        </Text>
+                      </Td>
+                      <Td border="1px" borderColor="gray.300" textAlign="center" p={1}>
+                        <Text fontSize="10px" fontWeight={category === 'TOPLAM' ? "bold" : "normal"}>
+                          ${data.summary_tables?.collection_details?.[category]?.msm?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '$0'}
+                        </Text>
+                      </Td>
+                      <Td border="1px" borderColor="gray.300" textAlign="center" p={1} bg={category === 'TOPLAM' ? "purple.200" : "blue.50"}>
+                        <Text fontSize="10px" fontWeight="bold" color={category === 'TOPLAM' ? "purple.800" : "blue.800"}>
+                          ${((data.summary_tables?.collection_details?.[category]?.mkm || 0) + (data.summary_tables?.collection_details?.[category]?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </Text>
+                      </Td>
+                    </Tr>
+                  ))}
+                </Tbody>
+              </Table>
+            </Box>
+          </Box>
+
+          {/* Daily Breakdown Table */}
+          <Box>
+            <Heading size="xs" mb={2} textAlign="center" color="teal.700" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+              Günlük Tahsilat Detayları
+            </Heading>
+            <Box overflowX="auto" bg="white" borderRadius="md" border="1px" borderColor="teal.200" w="100%">
+              <Table variant="simple" size="sm" w="100%" style={{ fontSize: '12px' }}>
+                <Tbody>
+                  <Tr>
+                    {/* First row: Days 1-16 */}
+                    {Array.from({ length: 16 }, (_, i) => {
+                      const day = i + 1;
+                      const dayStr = day.toString().padStart(2, '0');
+                      const dateKey = `${dayStr}-09-2025`;
+                      const amount = data.monthly_daily_totals?.daily_totals?.[dateKey] || 0;
+                      const hasData = amount > 0;
+                      
+                      return (
+                        <Td key={`data1-${day}`} border="1px" borderColor="teal.200" textAlign="center" p={2} bg={hasData ? "white" : "gray.50"} minW="65px">
+                          <VStack spacing={1}>
+                            <Text fontSize="11px" fontWeight="bold" color="teal.800" lineHeight="1.2">
+                              {day} eylül
+                            </Text>
+                            {hasData ? (
+                              <Text fontSize="10px" fontWeight="bold" color="teal.700" lineHeight="1.2" mt="2px">
+                                ${(amount as number).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              </Text>
+                            ) : (
+                              <Text fontSize="10px" color="gray.400" lineHeight="1.2" mt="2px">-</Text>
+                            )}
+                          </VStack>
+                        </Td>
+                      );
+                    })}
+                  </Tr>
+                  <Tr>
+                    {/* Second row: Days 17-31 */}
+                    {Array.from({ length: 15 }, (_, i) => {
+                      const day = i + 17;
+                      const dayStr = day.toString().padStart(2, '0');
+                      const dateKey = `${dayStr}-09-2025`;
+                      const amount = data.monthly_daily_totals?.daily_totals?.[dateKey] || 0;
+                      const hasData = amount > 0;
+                      
+                      return (
+                        <Td key={`data2-${day}`} border="1px" borderColor="teal.200" textAlign="center" p={2} bg={hasData ? "white" : "gray.50"} minW="65px">
+                          <VStack spacing={1}>
+                            <Text fontSize="11px" fontWeight="bold" color="teal.800" lineHeight="1.2">
+                              {day} eylül
+                            </Text>
+                            {hasData ? (
+                              <Text fontSize="10px" fontWeight="bold" color="teal.700" lineHeight="1.2" mt="2px">
+                                ${(amount as number).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                              </Text>
+                            ) : (
+                              <Text fontSize="10px" color="gray.400" lineHeight="1.2" mt="2px">-</Text>
+                            )}
+                          </VStack>
+                        </Td>
+                      );
+                    })}
+                    {/* Monthly Total Cell */}
+                    <Td border="1px" borderColor="teal.400" textAlign="center" p={2} bg="teal.100" minW="75px">
+                      <VStack spacing={1}>
+                        <Text fontSize="11px" fontWeight="bold" color="teal.800" lineHeight="1.2">TOPLAM</Text>
+                        <Text fontSize="10px" fontWeight="bold" color="teal.800" lineHeight="1.2" mt="2px">
+                          ${((data.summary_tables?.collection_details?.['TOPLAM']?.mkm || 0) + (data.summary_tables?.collection_details?.['TOPLAM']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}
+                        </Text>
+                      </VStack>
+                    </Td>
+                  </Tr>
+                </Tbody>
+              </Table>
+            </Box>
+            {data.monthly_daily_totals && (
+              <Text fontSize="xs" color="gray.500" mt={1} textAlign="center">
+                {data.monthly_daily_totals.month_name} • Günlük tahsilat tutarları USD olarak gösterilmiştir
+              </Text>
+            )}
+          </Box>
+        </VStack>
+
+        {/* Week Summary Footer */}
+        <Box py={2} mt={3} textAlign="center" bg="gray.50" borderRadius="md">
           <HStack justify="center">
-            <Text fontWeight="bold">Week Total (USD):</Text>
-            {data.week_totals && (
-              data.week_totals.genel_toplam?.tl > 0 || 
-              data.week_totals.genel_toplam?.usd > 0
-            ) ? (
-              <HStack spacing={3}>
-                <Badge colorScheme="green" fontSize="md" px={3} py={1}>
-                  ${((data.week_totals.genel_toplam.usd || 0) + ((data.week_totals.genel_toplam.tl || 0) / 34)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </Badge>
-                {data.week_totals.genel_toplam.original_currencies && data.week_totals.genel_toplam.original_currencies.includes('TL') && (
-                  <Badge colorScheme="blue" fontSize="sm" px={2} py={1}>
-                    Includes TL
-                  </Badge>
-                )}
-                {data.week_totals.genel_toplam.original_currencies && data.week_totals.genel_toplam.original_currencies.includes('EUR') && (
-                  <Badge colorScheme="purple" fontSize="sm" px={2} py={1}>
-                    Includes EUR
-                  </Badge>
-                )}
-              </HStack>
+            <Text fontSize="sm" fontWeight="bold">Week Total:</Text>
+            {data.week_totals && data.week_totals.genel_toplam?.usd > 0 ? (
+              <Badge colorScheme="green" fontSize="sm" px={3} py={1}>
+                ${data.week_totals.genel_toplam.usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </Badge>
             ) : (
-              <Badge colorScheme="gray" fontSize="md" px={3} py={1}>
-                No payment data found for this week
+              <Badge colorScheme="gray" fontSize="sm" px={3} py={1}>
+                No data
               </Badge>
             )}
           </HStack>
           
-          {data.week_totals && (
-            data.week_totals.genel_toplam?.tl > 0 || 
-            data.week_totals.genel_toplam?.usd > 0
-          ) && (
-            <Text fontSize="sm" color="gray.600" mt={2}>
-              Week {data.week_number || selectedWeek} • {data.weekly_report.length} customers
+          {data.week_totals && data.week_totals.genel_toplam?.usd > 0 && (
+            <Text fontSize="xs" color="gray.600" mt={1}>
+              Week {selectedWeek} • {data.weekly_report.length} customers
             </Text>
           )}
         </Box>
-        
-        <Text fontSize="xs" color="gray.500" mt={3} textAlign="center">
+
+        <Text fontSize="xs" color="gray.500" mt={2} textAlign="center">
           All amounts displayed in USD • TL and EUR payments converted to USD • 
           <Text as="span" color="blue.600">TL</Text> and <Text as="span" color="purple.600">EUR</Text> indicators show original payment currencies
         </Text>
-
-        {/* Summary Tables Section */}
-        <Box mt={6} w="100%">
-          <VStack spacing={4} align="stretch">
-            
-            {/* Table 1: Ödeme Nedeni Summary */}
-            <Box>
-              <Heading size="sm" mb={3} textAlign="center" color="blue.700" fontWeight="600">
-                Ödeme Nedeni Özeti
-              </Heading>
-              <Box 
-                overflowX="hidden" 
-                bg="white" 
-                borderRadius="lg" 
-                border="1px" 
-                borderColor="blue.200" 
-                boxShadow="lg"
-                w="100%" 
-                mx={0}
-              >
-                <Table 
-                  variant="simple" 
-                  size="xs" 
-                  w="100%" 
-                  style={{ tableLayout: 'fixed' }}
-                  fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                >
-                  <Thead>
-                    <Tr>
-                      <Th border="1px" borderColor="blue.200" textAlign="left" p={2} bg="blue.600" color="white" w="40%">
-                        <Text fontSize="xs" fontWeight="bold">Ödeme Nedeni</Text>
-                      </Th>
-                      <Th border="1px" borderColor="blue.200" textAlign="center" p={2} bg="blue.600" color="white" w="30%">
-                        <Text fontSize="xs" fontWeight="bold">Toplam TL</Text>
-                      </Th>
-                      <Th border="1px" borderColor="blue.200" textAlign="center" p={2} bg="blue.600" color="white" w="30%">
-                        <Text fontSize="xs" fontWeight="bold">Toplam USD</Text>
-                      </Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    <Tr _hover={{ bg: "blue.25" }}>
-                      <Td border="1px" borderColor="blue.200" p={2}>
-                        <Text fontSize="xs" fontWeight="500" color="gray.800">Banka Havalesi</Text>
-                      </Td>
-                      <Td border="1px" borderColor="blue.200" textAlign="center" p={2}>
-                        <Text fontSize="xs" fontWeight="500" color="gray.800">
-                          {data.summary_tables?.payment_method_summary?.['Banka Havalesi']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="blue.200" textAlign="center" p={2}>
-                        <Text fontSize="xs" fontWeight="500" color="gray.800">
-                          ${data.summary_tables?.payment_method_summary?.['Banka Havalesi']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "blue.25" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">Nakit</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="right" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          {data.summary_tables?.payment_method_summary?.['Nakit']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="right" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.payment_method_summary?.['Nakit']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">Çek</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="right" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          {data.summary_tables?.payment_method_summary?.['Çek']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="right" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.payment_method_summary?.['Çek']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr bg="green.50" _hover={{ bg: "green.100" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">Genel Toplam</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="right" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          {data.summary_tables?.payment_method_summary?.['Genel Toplam']?.tl?.toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="right" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.payment_method_summary?.['Genel Toplam']?.usd?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                  </Tbody>
-                </Table>
-              </Box>
-            </Box>
-
-            {/* Table 2: Weekly Summary */}
-            <Box>
-              <Heading size="md" mb={4} textAlign="center" color="green.600">
-                Haftalık Toplam Özeti
-              </Heading>
-              <Box 
-                overflowX="hidden" 
-                bg="white" 
-                borderRadius="md" 
-                border="1px" 
-                borderColor="gray.200" 
-                w="100%" 
-                mx={0}
-              >
-                <Table 
-                  variant="simple" 
-                  size="sm" 
-                  w="100%" 
-                  style={{ tableLayout: 'auto' }}
-                  fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                >
-                  <Thead>
-                    <Tr>
-                      <Th border="1px" borderColor="gray.300" textAlign="left" p={3} bg="green.50">
-                        <Text fontSize="sm" fontWeight="bold" color="gray.700">Dönem</Text>
-                      </Th>
-                      <Th border="1px" borderColor="gray.300" textAlign="center" p={3} bg="green.50">
-                        <Text fontSize="sm" fontWeight="bold" color="gray.700">USD</Text>
-                      </Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">HAFTALIK MKM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.periodic_summary?.weekly?.['HAFTALIK MKM']?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">HAFTALIK MSM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.periodic_summary?.weekly?.['HAFTALIK MSM']?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr bg="blue.50" _hover={{ bg: "blue.100" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.periodic_summary?.weekly?.['TOPLAM']?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                  </Tbody>
-                </Table>
-              </Box>
-            </Box>
-
-            {/* Table 3: Monthly Summary */}
-            <Box>
-              <Heading size="sm" mb={3} textAlign="center" color="orange.700" fontWeight="600">
-                Aylık Toplam Özeti
-              </Heading>
-              <Box 
-                overflowX="hidden" 
-                bg="white" 
-                borderRadius="lg" 
-                border="1px" 
-                borderColor="orange.200" 
-                boxShadow="lg"
-                w="100%" 
-                mx={0}
-              >
-                <Table 
-                  variant="simple" 
-                  size="xs" 
-                  w="100%" 
-                  style={{ tableLayout: 'fixed' }}
-                  fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                >
-                  <Thead>
-                    <Tr>
-                      <Th border="1px" borderColor="orange.200" textAlign="left" p={2} bg="orange.600" color="white" w="50%">
-                        <Text fontSize="xs" fontWeight="bold">Dönem</Text>
-                      </Th>
-                      <Th border="1px" borderColor="orange.200" textAlign="center" p={2} bg="orange.600" color="white" w="50%">
-                        <Text fontSize="xs" fontWeight="bold">USD</Text>
-                      </Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">MKM AYLIK TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['TOPLAM']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '$0.00'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">MSM AYLIK TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['TOPLAM']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '$0.00'}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr bg="orange.50" _hover={{ bg: "orange.100" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">GENEL TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['TOPLAM']?.mkm || 0) + (data.summary_tables?.collection_details?.['TOPLAM']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                  </Tbody>
-                </Table>
-              </Box>
-            </Box>
-
-            {/* Table 4: Payment Details */}
-            <Box>
-              <Heading size="sm" mb={3} textAlign="center" color="purple.700" fontWeight="600">
-                Tahsilat Detayları
-              </Heading>
-              <Box 
-                overflowX="hidden" 
-                bg="white" 
-                borderRadius="lg" 
-                border="1px" 
-                borderColor="purple.200" 
-                boxShadow="lg"
-                w="100%" 
-                mx={0}
-              >
-                <Table 
-                  variant="simple" 
-                  size="xs" 
-                  w="100%" 
-                  style={{ tableLayout: 'fixed' }}
-                  fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                >
-                  <Thead>
-                    <Tr>
-                      <Th border="1px" borderColor="purple.200" textAlign="left" p={2} bg="purple.600" color="white" w="25%">
-                        <Text fontSize="xs" fontWeight="bold">USD</Text>
-                      </Th>
-                      <Th border="1px" borderColor="purple.200" textAlign="center" p={2} bg="purple.600" color="white" w="25%">
-                        <Text fontSize="xs" fontWeight="bold">MKM AYLIK</Text>
-                      </Th>
-                      <Th border="1px" borderColor="purple.200" textAlign="center" p={2} bg="purple.600" color="white" w="25%">
-                        <Text fontSize="xs" fontWeight="bold">MSM AYLIK</Text>
-                      </Th>
-                      <Th border="1px" borderColor="purple.200" textAlign="center" p={2} bg="purple.600" color="white" w="25%">
-                        <Text fontSize="xs" fontWeight="bold">TOPLAM</Text>
-                      </Th>
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">CARŞI</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['CARŞI']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '$0.00'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['CARŞI']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '$0.00'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="blue.50">
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['CARŞI']?.mkm || 0) + (data.summary_tables?.collection_details?.['CARŞI']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">KUYUMCUKENT</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['KUYUMCUKENT']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['KUYUMCUKENT']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="blue.50">
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['KUYUMCUKENT']?.mkm || 0) + (data.summary_tables?.collection_details?.['KUYUMCUKENT']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">OFİS</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['OFİS']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['OFİS']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="blue.50">
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['OFİS']?.mkm || 0) + (data.summary_tables?.collection_details?.['OFİS']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">BANKA HAVALESİ</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['BANKA HAVALESİ']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['BANKA HAVALESİ']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="blue.50">
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['BANKA HAVALESİ']?.mkm || 0) + (data.summary_tables?.collection_details?.['BANKA HAVALESİ']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">ÇEK</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${(data.summary_tables?.collection_details?.['ÇEK']?.mkm || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${(data.summary_tables?.collection_details?.['ÇEK']?.msm || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="blue.50">
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['ÇEK']?.mkm || 0) + (data.summary_tables?.collection_details?.['ÇEK']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr _hover={{ bg: "gray.50" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['TOPLAM']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['TOPLAM']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="blue.50">
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['TOPLAM']?.mkm || 0) + (data.summary_tables?.collection_details?.['TOPLAM']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                    <Tr bg="purple.50" _hover={{ bg: "purple.100" }}>
-                      <Td border="1px" borderColor="gray.300" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">GENEL TOPLAM</Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['GENEL TOPLAM']?.mkm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3}>
-                        <Text fontSize="sm" fontWeight="bold" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${data.summary_tables?.collection_details?.['GENEL TOPLAM']?.msm?.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || '-'}
-                        </Text>
-                      </Td>
-                      <Td border="1px" borderColor="gray.300" textAlign="center" p={3} bg="purple.200">
-                        <Text fontSize="md" fontWeight="bold" color="purple.800" fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif">
-                          ${((data.summary_tables?.collection_details?.['GENEL TOPLAM']?.mkm || 0) + (data.summary_tables?.collection_details?.['GENEL TOPLAM']?.msm || 0)).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </Text>
-                      </Td>
-                    </Tr>
-                  </Tbody>
-                </Table>
-              </Box>
-            </Box>
-
-            {/* Table 5: Monthly Daily Breakdown */}
-            <Box>
-              <Heading size="sm" mb={3} textAlign="center" color="blue.700" fontWeight="600">
-                Eylül 2025 Günlük Tahsilatlar
-              </Heading>
-              <Box 
-                overflowX="hidden" 
-                bg="white" 
-                borderRadius="lg" 
-                border="1px" 
-                borderColor="blue.200" 
-                boxShadow="lg"
-                w="100%" 
-                mx={0}
-              >
-                <Table 
-                  variant="simple" 
-                  size="xs" 
-                  w="100%" 
-                  style={{ tableLayout: 'fixed' }}
-                  fontFamily="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
-                >
-                  <Thead>
-                    {/* First row: Days 1-15 */}
-                    <Tr>
-                      {Array.from({ length: 15 }, (_, i) => (
-                        <Th 
-                          key={i + 1} 
-                          border="1px" 
-                          borderColor="blue.200" 
-                          textAlign="center" 
-                          p={1} 
-                          bg="blue.600"
-                          color="white"
-                          fontSize="10px"
-                          fontWeight="bold"
-                          w="6.66%"
-                        >
-                          {(i + 1).toString().padStart(2, '0')}/09
-                        </Th>
-                      ))}
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    <Tr _hover={{ bg: "blue.25" }}>
-                      {/* First row values: Days 1-15 */}
-                      {Array.from({ length: 15 }, (_, i) => {
-                        const day = (i + 1).toString().padStart(2, '0');
-                        const dateKey = `${day}-09-2025`;
-                        const amount = data.monthly_daily_totals?.daily_totals?.[dateKey] || 0;
-                        return (
-                          <Td 
-                            key={i + 1} 
-                            border="1px" 
-                            borderColor="blue.200" 
-                            textAlign="center" 
-                            p={1}
-                            bg={amount > 0 ? "green.100" : "gray.100"}
-                            fontSize="9px"
-                            fontWeight="500"
-                          >
-                            <Text fontSize="9px" color={amount > 0 ? "green.800" : "gray.500"}>
-                              {amount > 0 ? `$${Math.round(amount).toLocaleString()}` : '-'}
-                            </Text>
-                          </Td>
-                        );
-                      })}
-                    </Tr>
-                  </Tbody>
-                  <Thead>
-                    {/* Second row: Days 16-30 */}
-                    <Tr>
-                      {Array.from({ length: 15 }, (_, i) => (
-                        <Th 
-                          key={i + 16} 
-                          border="1px" 
-                          borderColor="blue.200" 
-                          textAlign="center" 
-                          p={1} 
-                          bg="blue.600"
-                          color="white"
-                          fontSize="10px"
-                          fontWeight="bold"
-                          w="6.66%"
-                        >
-                          {(i + 16).toString().padStart(2, '0')}/09
-                        </Th>
-                      ))}
-                    </Tr>
-                  </Thead>
-                  <Tbody>
-                    <Tr _hover={{ bg: "blue.25" }}>
-                      {/* Second row values: Days 16-30 */}
-                      {Array.from({ length: 15 }, (_, i) => {
-                        const day = (i + 16).toString().padStart(2, '0');
-                        const dateKey = `${day}-09-2025`;
-                        const amount = data.monthly_daily_totals?.daily_totals?.[dateKey] || 0;
-                        return (
-                          <Td 
-                            key={i + 16} 
-                            border="1px" 
-                            borderColor="blue.200" 
-                            textAlign="center" 
-                            p={1}
-                            bg={amount > 0 ? "green.100" : "gray.100"}
-                            fontSize="9px"
-                            fontWeight="500"
-                          >
-                            <Text fontSize="9px" color={amount > 0 ? "green.800" : "gray.500"}>
-                              {amount > 0 ? `$${Math.round(amount).toLocaleString()}` : '-'}
-                            </Text>
-                          </Td>
-                        );
-                      })}
-                    </Tr>
-                  </Tbody>
-                </Table>
-              </Box>
-            </Box>
-
-          </VStack>
-        </Box>
-      </Box>
+      </VStack>
     );
   };
 
+  // Prepare sidebar props
+  const sidebarProps = {
+    selectedYear,
+    selectedMonth,
+    selectedWeek,
+    availableYears,
+    availableMonths,
+    weeksInSelectedMonth,
+    onYearChange: handleYearChange,
+    onMonthChange: handleMonthChange,
+    onWeekSelect: handleWeekSelect,
+    onRefreshReports: handleRefreshReports,
+    isLoadingReportList
+  };
+
   return (
-    <Box w="100%">
-      <Flex justifyContent="space-between" alignItems="center" mb={6}>
-        <Heading size="lg">Weekly Collections Reports</Heading>
-        <HStack spacing={3}>
-          <Button 
-            colorScheme="teal" 
-            size="sm"
-            onClick={() => {
-              toast({
-                title: "Manual test",
-                description: `State debug: weeklyReports.length=${weeklyReports.length}, selectedYear=${selectedYear}, selectedMonth=${selectedMonth}`,
-                status: "info",
-                duration: 5000,
-                isClosable: true,
-              });
-              fetchAndLoadAllReports();
-            }}
-          >
-            Test Fetch
-          </Button>
-          <Button 
-            colorScheme="brand" 
-            leftIcon={<FiRefreshCw />}
-            onClick={handleRegenerateReports}
-            isLoading={isLoadingReportList}
-          >
-            Refresh Data
-          </Button>
-        </HStack>
-      </Flex>
-      
-      <Card w="100%">
-        <CardHeader>
-          <Flex justify="space-between" align="center">
-            <Heading size="md">Weekly Collections Table</Heading>
-            <Text fontSize="sm" color="gray.600">
-              Select a week to view detailed collections
-            </Text>
-          </Flex>
-        </CardHeader>
-        <CardBody w="100%">
-          <Stack spacing={6} w="100%">
+    <Layout sidebarProps={sidebarProps}>
+      <Box w="100%" maxW="none" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">
+        {/* Header */}
+        <Flex justifyContent="space-between" alignItems="center" mb={4}>
+          <Heading size="lg" fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif">Weekly Collections Reports</Heading>
+          {selectedWeek && (
+            <Menu>
+              <MenuButton
+                as={Button}
+                rightIcon={<ChevronDownIcon />}
+                colorScheme="brand"
+                size="sm"
+                fontFamily="'Century Gothic', 'Futura', 'Trebuchet MS', Arial, sans-serif"
+                isDisabled={!allWeekReports[selectedWeek] || !allWeekReports[selectedWeek].success || 
+                           Object.keys(isExporting).some(key => key.startsWith(`${selectedWeek}-`))}
+              >
+                {Object.keys(isExporting).some(key => key.startsWith(`${selectedWeek}-`)) 
+                  ? 'Exporting...' 
+                  : 'Export Report'}
+              </MenuButton>
+              <MenuList>
+                <MenuItem 
+                  icon={isExporting[`${selectedWeek}-xlsx`] ? <Spinner size="sm" /> : <DownloadIcon />} 
+                  onClick={() => handleExport('xlsx', selectedWeek)}
+                  isDisabled={isExporting[`${selectedWeek}-xlsx`]}
+                >
+                  Export as Excel
+                </MenuItem>
+                <MenuItem 
+                  icon={isExporting[`${selectedWeek}-csv`] ? <Spinner size="sm" /> : <DownloadIcon />} 
+                  onClick={() => handleExport('csv', selectedWeek)}
+                  isDisabled={isExporting[`${selectedWeek}-csv`]}
+                >
+                  Export as CSV
+                </MenuItem>
+                <MenuItem 
+                  icon={isExporting[`${selectedWeek}-json`] ? <Spinner size="sm" /> : <DownloadIcon />} 
+                  onClick={() => handleExport('json', selectedWeek)}
+                  isDisabled={isExporting[`${selectedWeek}-json`]}
+                >
+                  Export as JSON
+                </MenuItem>
+                <MenuItem 
+                  icon={<Icon as={FaPrint} />} 
+                  onClick={() => handlePrint(selectedWeek)}
+                >
+                  Print Report
+                </MenuItem>
+              </MenuList>
+            </Menu>
+          )}
+        </Flex>
+        
+        {/* Main Content */}
+        <Card w="100%">
+          <CardHeader py={3}>
+            <Heading size="md">
+              {selectedWeek ? `Week ${selectedWeek} Collections` : 'Select a week from the sidebar'}
+            </Heading>
+          </CardHeader>
+          <CardBody py={3}>
             {isLoadingReportList ? (
               <Flex justify="center" py={8} direction="column" align="center">
                 <Spinner size="xl" mb={4} />
                 <Text>Loading available reports...</Text>
               </Flex>
             ) : error && weeklyReports.length === 0 ? (
-              <Box p={8} textAlign="center">
-                <Alert status="error" mb={4}>
-                  <AlertIcon />
-                  {error}
-                </Alert>
-                <Button 
-                  colorScheme="brand" 
-                  leftIcon={<FiRefreshCw />}
-                  onClick={() => fetchWeeklyReportsList(true)}
-                  mt={4}
-                >
-                  Retry Loading Reports
-                </Button>
-              </Box>
-            ) : weeklyReports.length === 0 ? (
-              <Box p={8} textAlign="center">
-                <Alert status="info" mb={4}>
-                  <AlertIcon />
-                  No weekly reports available. Import some payment data first.
-                </Alert>
-                <Button 
-                  colorScheme="brand" 
-                  onClick={() => window.location.href = '/import-new'}
-                >
-                  Go to Import Page
-                </Button>
-              </Box>
+              <Alert status="error">
+                <AlertIcon />
+                {error}
+              </Alert>
+            ) : !selectedWeek ? (
+              <Alert status="info">
+                <AlertIcon />
+                Please select a week from the sidebar to view the report
+              </Alert>
+            ) : !allWeekReports[selectedWeek] ? (
+              <Flex justify="center" py={8} direction="column" align="center">
+                <Spinner size="xl" mb={4} />
+                <Text>Loading report data for Week {selectedWeek}...</Text>
+              </Flex>
             ) : (
-              <>
-                {/* Year and Month Selection */}
-                <HStack spacing={4} wrap="wrap" mb={4}>
-                  <Box>
-                    <FormLabel htmlFor="year-select" mb={2}>Year:</FormLabel>
-                    <Select 
-                      id="year-select"
-                      value={selectedYear}
-                      onChange={handleYearChange}
-                      width="auto"
-                      minWidth="120px"
-                    >
-                      {availableYears.map(year => (
-                        <option key={year} value={year}>{year}</option>
-                      ))}
-                    </Select>
-                  </Box>
-                  
-                  <Box>
-                    <FormLabel htmlFor="month-select" mb={2}>Month:</FormLabel>
-                    <Select 
-                      id="month-select"
-                      value={selectedMonth}
-                      onChange={handleMonthChange}
-                      width="auto"
-                      minWidth="150px"
-                    >
-                      {availableMonths.map(month => {
-                        // Convert numeric month (1-12) to proper month name (0-based index)
-                        const monthIndex = Math.max(0, (month || 1) - 1);
-                        const monthName = MONTHS[monthIndex];
-                        return (
-                          <option key={month} value={month}>
-                            {monthName || `Month ${month}`}
-                          </option>
-                        );
-                      })}
-                    </Select>
-                  </Box>
-                </HStack>
-                
-                <Divider />
-                
-                {/* Week Tabs and Report Display */}
-                {weeksInSelectedMonth.length === 0 ? (
-                  <Alert status="info">
-                    <AlertIcon />
-                    No weekly reports available for the selected month.
-                  </Alert>
-                ) : (
-                  <Tabs index={selectedWeek ? weeksInSelectedMonth.findIndex(w => w.week_number === selectedWeek) : 0} 
-                        onChange={(index) => setSelectedWeek(weeksInSelectedMonth[index]?.week_number || null)}>
-                    <TabList>
-                      {weeksInSelectedMonth.map((week) => (
-                        <Tab key={week.week_number} isDisabled={!week.has_data}>
-                          Week {week.week_number}
-                        </Tab>
-                      ))}
-                    </TabList>
-                    
-                    <TabPanels>
-                      {weeksInSelectedMonth.map((week) => (
-                        <TabPanel key={week.week_number} p={4}>
-                          {/* Week Info and Export Menu */}
-                          <Flex justify="space-between" align="center" mb={4}>
-                            <Text fontWeight="medium">
-                              {week.formatted_date}
-                            </Text>
-                            <Menu>
-                              <MenuButton
-                                as={Button}
-                                rightIcon={<ChevronDownIcon />}
-                                colorScheme="brand"
-                                size="sm"
-                                isDisabled={!allWeekReports[week.week_number] || !allWeekReports[week.week_number].success || 
-                                           Object.keys(isExporting).some(key => key.startsWith(`${week.week_number}-`))}
-                              >
-                                {Object.keys(isExporting).some(key => key.startsWith(`${week.week_number}-`)) 
-                                  ? 'Exporting...' 
-                                  : 'Export Report'}
-                              </MenuButton>
-                              <MenuList>
-                                <MenuItem 
-                                  icon={isExporting[`${week.week_number}-xlsx`] ? <Spinner size="sm" /> : <DownloadIcon />} 
-                                  onClick={() => handleExport('xlsx', week.week_number)}
-                                  isDisabled={isExporting[`${week.week_number}-xlsx`]}
-                                >
-                                  Export as Excel
-                                </MenuItem>
-                                <MenuItem 
-                                  icon={isExporting[`${week.week_number}-csv`] ? <Spinner size="sm" /> : <DownloadIcon />} 
-                                  onClick={() => handleExport('csv', week.week_number)}
-                                  isDisabled={isExporting[`${week.week_number}-csv`]}
-                                >
-                                  Export as CSV
-                                </MenuItem>
-                                <MenuItem 
-                                  icon={isExporting[`${week.week_number}-json`] ? <Spinner size="sm" /> : <DownloadIcon />} 
-                                  onClick={() => handleExport('json', week.week_number)}
-                                  isDisabled={isExporting[`${week.week_number}-json`]}
-                                >
-                                  Export as JSON
-                                </MenuItem>
-                              </MenuList>
-                            </Menu>
-                          </Flex>
-                          
-                          <Divider mb={4} />
-                          
-                          {/* Report Content */}
-                          {!allWeekReports[week.week_number] ? (
-                            <Flex justify="center" py={8} direction="column" align="center">
-                              <Spinner size="xl" mb={4} />
-                              <Text>Loading report data for Week {week.week_number}...</Text>
-                            </Flex>
-                          ) : allWeekReports[week.week_number].error ? (
-                            <Alert status="error">
-                              <AlertIcon />
-                              {allWeekReports[week.week_number].error}
-                            </Alert>
-                          ) : !allWeekReports[week.week_number].success ? (
-                            <Alert status="error">
-                              <AlertIcon />
-                              Failed to load report data for Week {week.week_number}
-                            </Alert>
-                          ) : (
-                            renderWeeklyCollectionsReport(allWeekReports[week.week_number])
-                          )}
-                        </TabPanel>
-                      ))}
-                    </TabPanels>
-                  </Tabs>
-                )}
-              </>
+              renderCompactWeeklyReport(allWeekReports[selectedWeek])
             )}
-          </Stack>
-        </CardBody>
-      </Card>
-    </Box>
+          </CardBody>
+        </Card>
+      </Box>
+    </Layout>
   );
 };
 
