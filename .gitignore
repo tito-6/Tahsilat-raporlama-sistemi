@@ -51,11 +51,11 @@ next-env.d.ts
 *.swp
 *.swo
 
-# Database files
+# Database files (exclude the main database from gitignore for deployment)
 *.sqlite
 *.sqlite3
 *.db
-tahsilat_data.db
+# tahsilat_data.db  # Commented out to include in deployment
 /backups/
 *.bak
 
@@ -69,3 +69,5 @@ debug_response.json
 response.json
 tmp/
 temp/
+# Local Netlify folder
+.netlify
