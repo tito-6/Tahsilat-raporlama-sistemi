@@ -1,32 +1,42 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { getDbConnection, executeQuery, initializeDatabase } from '../../../lib/utils/database';
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   try {
-    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-    
-    console.log('Attempting to open database at:', dbPath);
-    
-    const db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database
-    });
-    
-    console.log('Database opened successfully');
+    // Test database connection
+    const client = await getDbConnection();
     
     // Test a simple query
-    const result = await db.get('SELECT COUNT(*) as count FROM payments LIMIT 1');
+    const result = await client.query('SELECT NOW() as current_time, version() as pg_version');
     
-    console.log('Query result:', result);
+    // Initialize database tables
+    await initializeDatabase();
     
-    await db.close();
+    // Check if payments table exists and get row count
+    const tableCheck = await client.query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' AND table_name = 'payments'
+    `);
+    
+    let paymentCount = 0;
+    if (tableCheck.rows.length > 0) {
+      const countResult = await client.query('SELECT COUNT(*) as count FROM payments');
+      paymentCount = parseInt(countResult.rows[0].count);
+    }
+    
+    client.release();
     
     res.status(200).json({
       success: true,
-      message: 'Database connection successful',
-      paymentCount: result?.count || 0
+      database: {
+        connected: true,
+        currentTime: result.rows[0].current_time,
+        postgresVersion: result.rows[0].pg_version,
+        paymentsTableExists: tableCheck.rows.length > 0,
+        paymentCount: paymentCount,
+        databaseUrl: process.env.NETLIFY_DATABASE_URL ? 'Connected via NETLIFY_DATABASE_URL' : 'No database URL'
+      }
     });
     
   } catch (error) {

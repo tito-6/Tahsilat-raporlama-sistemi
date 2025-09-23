@@ -1,7 +1,5 @@
 import { NextApiRequest, NextApiResponse } from 'next';
-import path from 'path';
-import sqlite3 from 'sqlite3';
-import { open } from 'sqlite';
+import { getDbConnection, initializeDatabase } from '../../../lib/utils/database';
 
 // Helper function to parse Turkish date format (DD/MM/YYYY)
 function parseTurkishDate(dateStr: string | Date): Date {
@@ -33,29 +31,36 @@ function parseTurkishDate(dateStr: string | Date): Date {
     return parsedDate;
   }
   
-  // Fallback to standard JS Date parsing
-  const parsedDate = new Date(dateStr);
-  if (!isNaN(parsedDate.getTime())) {
-    console.log(`Standard date parse: ${dateStr} -> ${parsedDate.toISOString()}`);
-    return parsedDate;
+  // Try ISO format as fallback
+  try {
+    const parsedDate = new Date(dateStr);
+    if (!isNaN(parsedDate.getTime())) {
+      console.log(`Parsed ISO: ${dateStr} -> ${parsedDate.toISOString()}`);
+      return parsedDate;
+    }
+  } catch (e) {
+    console.log(`Failed to parse date: ${dateStr}`);
   }
   
-  console.error(`Failed to parse date: ${dateStr}`);
-  return new Date(); // Return current date if parsing fails
+  console.log(`Falling back to current date for: ${dateStr}`);
+  return new Date();
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'GET') {
-    return res.status(405).json({ error: 'Method not allowed' });
+    return res.status(405).json({ success: false, message: 'Method not allowed' });
   }
 
   try {
-    const { 
-      page = 1, 
-      limit = 50, 
-      search = '', 
-      payment_method = '', 
-      currency = '', 
+    // Initialize database
+    await initializeDatabase();
+
+    const {
+      page = '1',
+      limit = '50',
+      search = '',
+      payment_method = '',
+      currency = '',
       project = '',
       customer = '',
       start_date = '', 
@@ -64,86 +69,62 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       sort_order = 'DESC'
     } = req.query;
 
-    const dbPath = path.join(process.cwd(), 'tahsilat_data.db');
-    const db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database
-    });
+    const client = await getDbConnection();
 
-    // Build WHERE clause for filtering
-    let whereConditions = [];
-    let params = [];
+    // Build WHERE conditions
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
 
     if (search) {
-      whereConditions.push(`(customer_name LIKE ? OR project_name LIKE ? OR payment_method LIKE ?)`);
-      const searchPattern = `%${search}%`;
-      params.push(searchPattern, searchPattern, searchPattern);
+      conditions.push(`(customer_name ILIKE $${paramIndex} OR project_name ILIKE $${paramIndex} OR notes ILIKE $${paramIndex})`);
+      params.push(`%${search}%`);
+      paramIndex++;
     }
 
     if (payment_method) {
-      whereConditions.push(`payment_method = ?`);
-      params.push(payment_method);
+      conditions.push(`payment_method ILIKE $${paramIndex}`);
+      params.push(`%${payment_method}%`);
+      paramIndex++;
     }
 
     if (currency) {
-      whereConditions.push(`currency_paid = ?`);
+      conditions.push(`currency_paid = $${paramIndex}`);
       params.push(currency);
+      paramIndex++;
     }
 
     if (project) {
-      whereConditions.push(`project_name = ?`);
-      params.push(project);
+      conditions.push(`project_name ILIKE $${paramIndex}`);
+      params.push(`%${project}%`);
+      paramIndex++;
     }
 
     if (customer) {
-      whereConditions.push(`customer_name = ?`);
-      params.push(customer);
+      conditions.push(`customer_name ILIKE $${paramIndex}`);
+      params.push(`%${customer}%`);
+      paramIndex++;
     }
 
     if (start_date) {
-      // Convert ISO date (YYYY-MM-DD) to Turkish format (DD/MM/YYYY) for comparison
-      const startDate = new Date(start_date as string);
-      const startDateTurkish = `${startDate.getDate().toString().padStart(2, '0')}/${(startDate.getMonth() + 1).toString().padStart(2, '0')}/${startDate.getFullYear()}`;
-      whereConditions.push(`
-        DATE(
-          substr(payment_date, 7, 4) || '-' || 
-          substr(payment_date, 4, 2) || '-' || 
-          substr(payment_date, 1, 2)
-        ) >= DATE(?)
-      `);
+      // For PostgreSQL, we'll store dates as text initially for compatibility
+      conditions.push(`payment_date >= $${paramIndex}`);
       params.push(start_date);
-      console.log(`Filtering payments from date: ${start_date} (${startDateTurkish})`);
+      paramIndex++;
     }
 
     if (end_date) {
-      // Convert ISO date (YYYY-MM-DD) to Turkish format (DD/MM/YYYY) for comparison
-      const endDate = new Date(end_date as string);
-      const endDateTurkish = `${endDate.getDate().toString().padStart(2, '0')}/${(endDate.getMonth() + 1).toString().padStart(2, '0')}/${endDate.getFullYear()}`;
-      whereConditions.push(`
-        DATE(
-          substr(payment_date, 7, 4) || '-' || 
-          substr(payment_date, 4, 2) || '-' || 
-          substr(payment_date, 1, 2)
-        ) <= DATE(?)
-      `);
+      conditions.push(`payment_date <= $${paramIndex}`);
       params.push(end_date);
-      console.log(`Filtering payments to date: ${end_date} (${endDateTurkish})`);
+      paramIndex++;
     }
 
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
-    // Validate sort parameters
-    const validSortColumns = ['payment_date', 'customer_name', 'project_name', 'amount_paid', 'payment_method'];
-    const validSortOrders = ['ASC', 'DESC'];
-    
-    const sortColumn = validSortColumns.includes(sort_by as string) ? sort_by : 'payment_date';
-    const sortDirection = validSortOrders.includes((sort_order as string).toUpperCase()) ? 
-      (sort_order as string).toUpperCase() : 'DESC';
-
-    // Get total count for pagination
-    const countQuery = `SELECT COUNT(*) as total FROM payments ${whereClause}`;
-    const countResult = await db.get(countQuery, params);
-    const totalRecords = countResult.total;
+    // Get total count
+    const countQuery = `SELECT COUNT(*) as count FROM payments ${whereClause}`;
+    const countResult = await client.query(countQuery, params);
+    const totalRecords = parseInt(countResult.rows[0].count);
 
     // Calculate pagination
     const pageNum = parseInt(page as string) || 1;
@@ -151,69 +132,53 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     const offset = (pageNum - 1) * limitNum;
     const totalPages = Math.ceil(totalRecords / limitNum);
 
-    // Get paginated payments
+    // Get payments with pagination
+    const orderClause = `ORDER BY ${sort_by} ${sort_order}`;
     const paymentsQuery = `
-      SELECT 
-        id,
-        payment_date,
-        customer_name,
-        project_name,
-        amount_paid,
-        currency_paid,
-        payment_method,
-        exchange_rate,
-        payment_date as exchange_rate_date, -- Using payment_date as exchange_rate_date
-        year,
-        month,
-        CASE 
-          WHEN currency_paid = 'USD' THEN amount_paid 
-          WHEN currency_paid = 'TL' OR currency_paid = 'TRY' THEN amount_paid * 0.029
-          WHEN currency_paid = 'EUR' THEN amount_paid * 1.1
-          ELSE amount_paid * 0.029
-        END as amount_usd
-      FROM payments 
-      ${whereClause}
-      ORDER BY ${sortColumn} ${sortDirection}
-      LIMIT ? OFFSET ?
+      SELECT * FROM payments 
+      ${whereClause} 
+      ${orderClause} 
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
     `;
+    
+    const paymentsResult = await client.query(paymentsQuery, [...params, limitNum, offset]);
+    const payments = paymentsResult.rows;
 
-    const payments = await db.all(paymentsQuery, [...params, limitNum, offset]);
-
-    // Get filter options for dropdowns
-    const paymentMethods = await db.all(`
+    // Get filter options
+    const paymentMethodsResult = await client.query(`
       SELECT DISTINCT payment_method 
       FROM payments 
       WHERE payment_method IS NOT NULL AND payment_method != ''
       ORDER BY payment_method
     `);
 
-    const currencies = await db.all(`
+    const currenciesResult = await client.query(`
       SELECT DISTINCT currency_paid 
       FROM payments 
       WHERE currency_paid IS NOT NULL AND currency_paid != ''
       ORDER BY currency_paid
     `);
 
-    const projects = await db.all(`
+    const projectsResult = await client.query(`
       SELECT DISTINCT project_name 
       FROM payments 
       WHERE project_name IS NOT NULL AND project_name != ''
       ORDER BY project_name
     `);
 
-    const customers = await db.all(`
+    const customersResult = await client.query(`
       SELECT DISTINCT customer_name 
       FROM payments 
       WHERE customer_name IS NOT NULL AND customer_name != ''
       ORDER BY customer_name
     `);
 
-    await db.close();
+    client.release();
 
     res.status(200).json({
       success: true,
       data: {
-        payments,
+        payments: payments,
         pagination: {
           page: pageNum,
           limit: limitNum,
@@ -223,20 +188,20 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
           has_prev: pageNum > 1
         },
         filters: {
-          payment_methods: paymentMethods.map(p => p.payment_method),
-          currencies: currencies.map(c => c.currency_paid),
-          projects: projects.map(p => p.project_name),
-          customers: customers.map(c => c.customer_name)
+          payment_methods: paymentMethodsResult.rows.map(p => p.payment_method),
+          currencies: currenciesResult.rows.map(c => c.currency_paid),
+          projects: projectsResult.rows.map(p => p.project_name),
+          customers: customersResult.rows.map(c => c.customer_name)
         }
       }
     });
-
+    
   } catch (error) {
-    console.error('Payments API error:', error);
+    console.error('Error fetching payments:', error);
     res.status(500).json({
       success: false,
-      error: 'Failed to fetch payments',
-      message: error instanceof Error ? error.message : String(error)
+      message: 'Failed to fetch payments',
+      error: error instanceof Error ? error.message : 'Unknown error'
     });
   }
 }
