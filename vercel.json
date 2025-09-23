@@ -19,6 +19,36 @@
       ]
     }
   ],
+  "rewrites": [
+    {
+      "source": "/api/reports/(.*)",
+      "destination": "/api/reports-unified?path=$1"
+    },
+    {
+      "source": "/api/settings/(.*)",
+      "destination": "/api/settings-unified?path=$1"
+    },
+    {
+      "source": "/api/database/(.*)",
+      "destination": "/api/database-unified?path=$1"
+    },
+    {
+      "source": "/api/import/(.*)",
+      "destination": "/api/import-unified?path=$1"
+    },
+    {
+      "source": "/api/auth/(.*)",
+      "destination": "/api/auth-unified?path=$1"
+    },
+    {
+      "source": "/api/payments",
+      "destination": "/api/general-unified?path=payments"
+    },
+    {
+      "source": "/api/debug/(.*)",
+      "destination": "/api/general-unified?path=debug/$1"
+    }
+  ],
   "functions": {
     "api/**/*.py": {
       "maxDuration": 30
